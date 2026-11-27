@@ -1,0 +1,72 @@
+name: QQ Music AdBlock (iOS App)
+desc: 去除 QQ 音乐 iOS App 开屏、横幅、搜索、信息流与弹窗广告，并拦截 TME / 优量汇广告域名与上报
+category: AdBlock
+arguments-version: 1
+
+arguments:
+  adProxy:
+    title: 去除开屏与信息流广告
+    description: 清空 TME 广告代理（maproxy/getInfo、getPbCompressAd）下发的开屏、横幅、搜索、信息流及插屏/激励广告与本地缓存包
+    type: switch
+    default: true
+  legacyBanner:
+    title: 去除弹窗与「我的」顶栏推广
+    description: 清空 fcg_get_advert.fcg 与 3g_get_mymusic_topbanner.fcg 下发的广告与顶部横幅
+    type: switch
+    default: true
+  debug:
+    title: 调试日志
+    description: 在 Stash 脚本日志中输出每次拦截/修改详情
+    type: switch
+    default: false
+
+rules:
+  # 拦截 QQ 音乐广告接口 QUIC (UDP 443)，强制回退到 HTTPS/TCP 以便 MitM 生效
+  - AND,((DOMAIN-SUFFIX,music.y.qq.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  - AND,((DOMAIN-SUFFIX,tmead.y.qq.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  - AND,((DOMAIN-SUFFIX,c6.y.qq.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  # 拦截 TME / 优量汇 (GDT) 纯广告配置、素材 CDN 与上报域名
+  - DOMAIN,ad.tencentmusic.com,REJECT
+  - DOMAIN,adstats.tencentmusic.com,REJECT
+  - DOMAIN,adcdn.tencentmusic.com,REJECT
+  - DOMAIN,adcdn6.tencentmusic.com,REJECT
+  - DOMAIN,adexpo.tencentmusic.com,REJECT
+  - DOMAIN,adclick.tencentmusic.com,REJECT
+  - DOMAIN,tmeadbak.y.qq.com,REJECT
+  - DOMAIN,tmeadcomm.y.qq.com,REJECT
+  - DOMAIN,us.l.qq.com,REJECT
+  - DOMAIN,adsmind.gdtimg.com,REJECT
+  - DOMAIN,pgdt.gtimg.cn,REJECT
+  - DOMAIN,v.gdt.qq.com,REJECT
+  - DOMAIN,rpt.gdt.qq.com,REJECT
+  - DOMAIN,mi.gdt.qq.com,REJECT
+  - DOMAIN,c2.gdt.qq.com,REJECT
+  - DOMAIN,tangram.e.qq.com,REJECT
+  - DOMAIN,sdkreport.e.qq.com,REJECT
+
+http:
+  mitm:
+    - "music.y.qq.com"
+    - "tmead.y.qq.com"
+    - "c6.y.qq.com"
+    - "c.y.qq.com"
+
+  url-rewrite:
+    # 拦截 TME 广告曝光/点击上报与拉活任务接口
+    - ^https?://(music|tmead)\.y\.qq\.com/mareport - reject-200
+    - ^https?://(music|tmead)\.y\.qq\.com/madownload/ - reject-200
+
+  script:
+    - match: ^https?://((music|tmead)\.y\.qq\.com/maproxy/(getInfo|getPbCompressAd)|c6?\.y\.qq\.com/(tips/fcgi-bin/fcg_get_advert\.fcg|musichall/fcgi-bin/3g_get_mymusic_topbanner\.fcg))
+      name: qqmusic-adblock
+      type: response
+      require-body: true
+      binary-mode: true
+      max-size: 5242880
+      timeout: 10
+      argument: "adProxy=${args.adProxy}&legacyBanner=${args.legacyBanner}&debug=${args.debug}"
+
+script-providers:
+  qqmusic-adblock:
+    url: https://raw.githubusercontent.com/xyz2332/stash-hub/main/scripts/qqmusic-adblock.js
+    interval: 86400
