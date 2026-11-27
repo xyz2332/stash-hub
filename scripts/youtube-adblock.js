@@ -1,15 +1,42 @@
 /**
- * YouTube iOS App AdBlock (Protobuf binary-mode response script for Stash)
+ * YouTube iOS App AdBlock & Enhance (Protobuf binary-mode response script for Stash)
  *
- * Targets InnerTube application/x-protobuf responses:
- *  - /youtubei/v1/player                  (pre-roll, mid-roll, post-roll ads)
- *  - /youtubei/v1/get_watch               (combined player + next)
- *  - /youtubei/v1/browse                  (home / feed / continuation ads)
- *  - /youtubei/v1/search                  (search result ads)
- *  - /youtubei/v1/next                    (watch-page companion & feed ads)
- *  - /youtubei/v1/reel/reel_item_watch    (Shorts player ads)
- *  - /youtubei/v1/reel/reel_watch_sequence (Shorts feed ads)
+ * Features (configurable via Stash override arguments):
+ *  - AdBlock (always on):
+ *      /youtubei/v1/player, get_watch, browse, search, next,
+ *      reel/reel_item_watch, reel/reel_watch_sequence
+ *  - bgPlay (default: true):
+ *      Unlocks background playback & forces Picture-in-Picture (PiP) in PlayerResponse
+ *  - hideShorts (default: false):
+ *      Removes Shorts tab from /youtubei/v1/guide & Shorts shelves from browse/search/next
+ *  - hideUpload (default: false):
+ *      Removes the center Upload (+) button from /youtubei/v1/guide
+ *  - debug (default: false):
+ *      Logs each modification to Stash script log
  */
+
+function parseArguments() {
+  const cfg = {
+    bgPlay: true,
+    hideShorts: false,
+    hideUpload: false,
+    debug: false,
+  };
+  if (typeof $argument !== 'string' || !$argument) return cfg;
+  const pairs = $argument.split('&');
+  for (let i = 0; i < pairs.length; i++) {
+    const idx = pairs[i].indexOf('=');
+    if (idx === -1) continue;
+    const k = pairs[i].slice(0, idx).trim();
+    const v = pairs[i].slice(idx + 1).trim().toLowerCase();
+    if (k in cfg) {
+      cfg[k] = v === 'true' || v === '1' || v === 'on';
+    }
+  }
+  return cfg;
+}
+
+const CFG = parseArguments();
 
 const AD_EML_PATTERNS = [
   'video_display_full',
@@ -91,6 +118,29 @@ function encodeVarint(val) {
   return out;
 }
 
+function makeTag(fieldNumber, wireType) {
+  return fieldNumber * 8 + wireType;
+}
+
+function encodeVarintField(fieldNumber, value) {
+  const tb = encodeVarint(makeTag(fieldNumber, 0));
+  const vb = encodeVarint(value);
+  const out = new Uint8Array(tb.length + vb.length);
+  out.set(tb, 0);
+  out.set(vb, tb.length);
+  return out;
+}
+
+function encodeLengthDelimited(tag, payload) {
+  const tagBytes = encodeVarint(tag);
+  const lenBytes = encodeVarint(payload.length);
+  const out = new Uint8Array(tagBytes.length + lenBytes.length + payload.length);
+  out.set(tagBytes, 0);
+  out.set(lenBytes, tagBytes.length);
+  out.set(payload, tagBytes.length + lenBytes.length);
+  return out;
+}
+
 function parseFields(buf, start, end) {
   const fields = [];
   let pos = start;
@@ -143,16 +193,6 @@ function concatParts(parts) {
   return out;
 }
 
-function encodeLengthDelimited(tag, payload) {
-  const tagBytes = encodeVarint(tag);
-  const lenBytes = encodeVarint(payload.length);
-  const out = new Uint8Array(tagBytes.length + lenBytes.length + payload.length);
-  out.set(tagBytes, 0);
-  out.set(lenBytes, tagBytes.length);
-  out.set(payload, tagBytes.length + lenBytes.length);
-  return out;
-}
-
 function bytesContainAscii(buf, start, end, needle) {
   const nLen = needle.length;
   const limit = end - nLen;
@@ -194,15 +234,23 @@ function isAdEmlString(str) {
 }
 
 /**
- * Checks whether an elementRenderer (153515154) or its wrapper message is an ad.
+ * Checks whether an elementRenderer (153515154) or its wrapper message is an ad (or Shorts if hideShorts is on).
  */
-function isAdElement(buf, start, end, depth) {
+function isFilteredElement(buf, start, end, depth) {
   if (depth > 6) return false;
   if (
     bytesContainAscii(buf, start, end, 'pagead/adview') ||
     bytesContainAscii(buf, start, end, 'pagead/interaction') ||
     bytesContainAscii(buf, start, end, 'googlesyndication.com') ||
     bytesContainAscii(buf, start, end, 'ad_badge.eml')
+  ) {
+    return true;
+  }
+  if (
+    CFG.hideShorts &&
+    (bytesContainAscii(buf, start, end, 'shorts_video_cell.eml') ||
+      bytesContainAscii(buf, start, end, 'shorts_lockup.eml') ||
+      bytesContainAscii(buf, start, end, 'shorts_shelf'))
   ) {
     return true;
   }
@@ -226,31 +274,123 @@ function isAdElement(buf, start, end, depth) {
       f.fn === 2 ||
       f.fn === 3
     ) {
-      if (isAdElement(buf, f.valStart, f.valEnd, depth + 1)) return true;
+      if (isFilteredElement(buf, f.valStart, f.valEnd, depth + 1)) return true;
     }
   }
   return false;
 }
 
+// Pre-encoded protobuf blobs for Background Playback & Picture-in-Picture (PiP)
+const BG_PLAY_FIELD = encodeLengthDelimited(
+  makeTag(11, 2),
+  encodeLengthDelimited(makeTag(64657230, 2), encodeVarintField(1, 1))
+);
+const PIP_ACTIVE_FIELD = encodeLengthDelimited(
+  makeTag(21, 2),
+  encodeLengthDelimited(makeTag(151635310, 2), encodeVarintField(1, 1))
+);
+
 /**
- * Strips PlayerResponse ad fields (7, 13, 42, 69).
- * Returns { modified, bytes, removed }.
+ * Unlocks Background Playback (field 11 -> 64657230 -> 1=1) and PiP (field 21 -> 151635310 -> 1=1)
+ * inside PlayerResponse.playabilityStatus (field 2).
  */
-function filterPlayerResponse(buf, start, end) {
+function enhancePlayabilityStatus(buf, start, end) {
   const fields = parseFields(buf, start, end);
-  if (!fields) return { modified: false, bytes: null, removed: 0 };
-  let removed = 0;
+  if (!fields) return null;
+
+  let modified = false;
+  let hasBg = false;
+  let hasPip = false;
   const parts = [];
+
   for (let i = 0; i < fields.length; i++) {
     const f = fields[i];
-    if (PLAYER_AD_FIELDS.has(f.fn)) {
-      removed++;
+    if (f.fn === 11 && f.wt === 2) {
+      hasBg = true;
+      parts.push(BG_PLAY_FIELD);
+      modified = true;
+      continue;
+    }
+    if (f.fn === 21 && f.wt === 2) {
+      hasPip = true;
+      // Check if 151635310 -> 1 is already 1; if not, patch it
+      const pipWrap = parseFields(buf, f.valStart, f.valEnd);
+      if (pipWrap && pipWrap.length === 1 && pipWrap[0].fn === 151635310 && pipWrap[0].wt === 2) {
+        const inner = parseFields(buf, pipWrap[0].valStart, pipWrap[0].valEnd);
+        if (inner) {
+          let activeOk = false;
+          const innerParts = [];
+          for (let j = 0; j < inner.length; j++) {
+            if (inner[j].fn === 1 && inner[j].wt === 0) {
+              const [v] = readVarint(buf, inner[j].valStart, inner[j].valEnd);
+              if (v === 1) {
+                activeOk = true;
+                innerParts.push(buf.subarray(inner[j].rawStart, inner[j].rawEnd));
+              } else {
+                innerParts.push(encodeVarintField(1, 1));
+                modified = true;
+              }
+            } else {
+              innerParts.push(buf.subarray(inner[j].rawStart, inner[j].rawEnd));
+            }
+          }
+          if (!activeOk) {
+            innerParts.push(encodeVarintField(1, 1));
+            modified = true;
+          }
+          if (modified) {
+            const newInner = encodeLengthDelimited(pipWrap[0].tag, concatParts(innerParts));
+            parts.push(encodeLengthDelimited(f.tag, newInner));
+            continue;
+          }
+        }
+      }
+      parts.push(buf.subarray(f.rawStart, f.rawEnd));
       continue;
     }
     parts.push(buf.subarray(f.rawStart, f.rawEnd));
   }
-  if (removed === 0) return { modified: false, bytes: null, removed: 0 };
-  return { modified: true, bytes: concatParts(parts), removed };
+
+  if (!hasBg) {
+    parts.push(BG_PLAY_FIELD);
+    modified = true;
+  }
+  if (!hasPip) {
+    parts.push(PIP_ACTIVE_FIELD);
+    modified = true;
+  }
+
+  return modified ? concatParts(parts) : null;
+}
+
+/**
+ * Strips PlayerResponse ad fields (7, 13, 42, 68, 69) and optionally unlocks bgPlay/PiP.
+ */
+function filterPlayerResponse(buf, start, end, stats) {
+  const fields = parseFields(buf, start, end);
+  if (!fields) return { modified: false, bytes: null };
+  let modified = false;
+  const parts = [];
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    if (PLAYER_AD_FIELDS.has(f.fn)) {
+      stats.removed++;
+      modified = true;
+      continue;
+    }
+    if (CFG.bgPlay && f.fn === 2 && f.wt === 2) {
+      const enhanced = enhancePlayabilityStatus(buf, f.valStart, f.valEnd);
+      if (enhanced) {
+        stats.enhanced = true;
+        modified = true;
+        parts.push(encodeLengthDelimited(f.tag, enhanced));
+        continue;
+      }
+    }
+    parts.push(buf.subarray(f.rawStart, f.rawEnd));
+  }
+  if (!modified) return { modified: false, bytes: null };
+  return { modified: true, bytes: concatParts(parts) };
 }
 
 /**
@@ -283,7 +423,7 @@ function filterFeedMessage(buf, start, end, currentFn, depth, stats) {
 
     // Inside itemSectionRenderer (50195462), field 1 is repeated ItemSectionContent
     if (currentFn === 50195462 && f.fn === 1 && f.wt === 2) {
-      if (isAdElement(buf, f.valStart, f.valEnd, 0)) {
+      if (isFilteredElement(buf, f.valStart, f.valEnd, 0)) {
         modified = true;
         droppedItemCount++;
         stats.removed++;
@@ -295,9 +435,8 @@ function filterFeedMessage(buf, start, end, currentFn, depth, stats) {
     }
 
     if (f.wt === 2 && f.valEnd - f.valStart >= 16) {
-      // Direct elementRenderer (e.g. companion banner in watchNext)
       if (f.fn === 153515154) {
-        if (isAdElement(buf, f.valStart, f.valEnd, 1)) {
+        if (isFilteredElement(buf, f.valStart, f.valEnd, 1)) {
           modified = true;
           stats.removed++;
           continue;
@@ -321,12 +460,72 @@ function filterFeedMessage(buf, start, end, currentFn, depth, stats) {
     parts.push(buf.subarray(f.rawStart, f.rawEnd));
   }
 
-  // Drop empty itemSectionRenderer after all its ad items are removed
   if (currentFn === 50195462 && droppedItemCount > 0 && keptItemCount === 0) {
     return 'EMPTY';
   }
   if (modified && parts.length === 0) {
     return 'EMPTY';
+  }
+  return modified ? concatParts(parts) : null;
+}
+
+/**
+ * Filters /youtubei/v1/guide bottom pivotBar items (FEshorts / FEuploads).
+ */
+function filterPivotBar(buf, start, end, stats) {
+  const fields = parseFields(buf, start, end);
+  if (!fields) return null;
+  let modified = false;
+  const parts = [];
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    if (f.fn === 1 && f.wt === 2) {
+      const dropShorts = CFG.hideShorts && bytesContainAscii(buf, f.valStart, f.valEnd, 'FEshorts');
+      const dropUpload = CFG.hideUpload && bytesContainAscii(buf, f.valStart, f.valEnd, 'FEuploads');
+      if (dropShorts || dropUpload) {
+        modified = true;
+        stats.removed++;
+        continue;
+      }
+    }
+    parts.push(buf.subarray(f.rawStart, f.rawEnd));
+  }
+  return modified ? concatParts(parts) : null;
+}
+
+function filterGuideResponse(buf, stats) {
+  if (!CFG.hideShorts && !CFG.hideUpload) return null;
+  const fields = parseFields(buf, 0, buf.length);
+  if (!fields) return null;
+  let modified = false;
+  const parts = [];
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    if ((f.fn === 4 || f.fn === 6) && f.wt === 2) {
+      const sub = parseFields(buf, f.valStart, f.valEnd);
+      if (sub) {
+        let subMod = false;
+        const subParts = [];
+        for (let j = 0; j < sub.length; j++) {
+          const sf = sub[j];
+          if (sf.fn === 117866661 && sf.wt === 2) {
+            const pb = filterPivotBar(buf, sf.valStart, sf.valEnd, stats);
+            if (pb) {
+              subMod = true;
+              subParts.push(encodeLengthDelimited(sf.tag, pb));
+              continue;
+            }
+          }
+          subParts.push(buf.subarray(sf.rawStart, sf.rawEnd));
+        }
+        if (subMod) {
+          modified = true;
+          parts.push(encodeLengthDelimited(f.tag, concatParts(subParts)));
+          continue;
+        }
+      }
+    }
+    parts.push(buf.subarray(f.rawStart, f.rawEnd));
   }
   return modified ? concatParts(parts) : null;
 }
@@ -344,18 +543,16 @@ function filterReelItemWatch(buf, stats) {
     if (f.fn === 3 && f.wt === 2) {
       const inner = parseFields(buf, f.valStart, f.valEnd);
       if (inner && inner.length === 1 && inner[0].fn === 139970731 && inner[0].wt === 2) {
-        const pr = filterPlayerResponse(buf, inner[0].valStart, inner[0].valEnd);
+        const pr = filterPlayerResponse(buf, inner[0].valStart, inner[0].valEnd, stats);
         if (pr.modified) {
-          stats.removed += pr.removed;
           const wrapped = encodeLengthDelimited(inner[0].tag, pr.bytes);
           parts.push(encodeLengthDelimited(f.tag, wrapped));
           modified = true;
           continue;
         }
       } else {
-        const pr = filterPlayerResponse(buf, f.valStart, f.valEnd);
+        const pr = filterPlayerResponse(buf, f.valStart, f.valEnd, stats);
         if (pr.modified) {
-          stats.removed += pr.removed;
           parts.push(encodeLengthDelimited(f.tag, pr.bytes));
           modified = true;
           continue;
@@ -382,7 +579,7 @@ function filterReelWatchSequence(buf, stats) {
         bytesContainAscii(buf, f.valStart, f.valEnd, 'pagead') ||
         bytesContainAscii(buf, f.valStart, f.valEnd, 'ad_slot') ||
         bytesContainAscii(buf, f.valStart, f.valEnd, 'reel_ad') ||
-        isAdElement(buf, f.valStart, f.valEnd, 0)
+        isFilteredElement(buf, f.valStart, f.valEnd, 0)
       ) {
         modified = true;
         stats.removed++;
@@ -405,9 +602,8 @@ function filterGetWatch(buf, stats) {
   for (let i = 0; i < fields.length; i++) {
     const f = fields[i];
     if (f.fn === 2 && f.wt === 2) {
-      const pr = filterPlayerResponse(buf, f.valStart, f.valEnd);
+      const pr = filterPlayerResponse(buf, f.valStart, f.valEnd, stats);
       if (pr.modified) {
-        stats.removed += pr.removed;
         parts.push(encodeLengthDelimited(f.tag, pr.bytes));
         modified = true;
         continue;
@@ -434,17 +630,16 @@ function filterGetWatch(buf, stats) {
       return;
     }
 
-    const stats = { removed: 0 };
+    const stats = { removed: 0, enhanced: false };
     let out = null;
 
     if (/\/youtubei\/v1\/player(\?|$)/.test(url)) {
-      const res = filterPlayerResponse(body, 0, body.length);
-      if (res.modified) {
-        stats.removed = res.removed;
-        out = res.bytes;
-      }
+      const res = filterPlayerResponse(body, 0, body.length, stats);
+      if (res.modified) out = res.bytes;
     } else if (url.indexOf('/youtubei/v1/get_watch') !== -1) {
       out = filterGetWatch(body, stats);
+    } else if (url.indexOf('/youtubei/v1/guide') !== -1) {
+      out = filterGuideResponse(body, stats);
     } else if (url.indexOf('/youtubei/v1/reel/reel_item_watch') !== -1) {
       out = filterReelItemWatch(body, stats);
     } else if (url.indexOf('/youtubei/v1/reel/reel_watch_sequence') !== -1) {
@@ -458,16 +653,18 @@ function filterGetWatch(buf, stats) {
       if (res && res !== 'EMPTY') out = res;
     }
 
-    if (out && stats.removed > 0) {
-      console.log(
-        `[YouTube AdBlock] ${url.split('?')[0].replace('https://youtubei.googleapis.com', '')}: removed=${stats.removed}, bytes=${body.length}->${out.length}`
-      );
+    if (out && (stats.removed > 0 || stats.enhanced)) {
+      if (CFG.debug) {
+        console.log(
+          `[YouTube Enhance] ${url.split('?')[0].replace('https://youtubei.googleapis.com', '')}: removed=${stats.removed}, bgPlay=${stats.enhanced}, bytes=${body.length}->${out.length}`
+        );
+      }
       $done({ body: out });
     } else {
       $done({});
     }
   } catch (err) {
-    console.log('[YouTube AdBlock] error: ' + err);
+    console.log('[YouTube Enhance] error: ' + err);
     $done({});
   }
 })();

@@ -1,6 +1,29 @@
-name: YouTube AdBlock (iOS App)
-desc: 去除 YouTube iOS App 首页信息流、推荐流、搜索结果、播放页横幅、片头/片中/片尾及 Shorts 广告
+name: YouTube AdBlock & Enhance (iOS App)
+desc: 去除 YouTube iOS App 广告，支持解锁后台播放/画中画、隐藏 Shorts 与底部上传按钮
 category: AdBlock
+arguments-version: 1
+
+arguments:
+  bgPlay:
+    title: 解锁后台播放与画中画
+    description: 切出 App 或锁屏时继续播放，并强制开启画中画 (PiP)
+    type: switch
+    default: true
+  hideShorts:
+    title: 隐藏 Shorts 短视频
+    description: 移除底部 Shorts 标签页及首页/搜索中的 Shorts 推荐架
+    type: switch
+    default: false
+  hideUpload:
+    title: 隐藏底部上传（+）按钮
+    description: 移除底部导航栏中间的创作/上传按钮
+    type: switch
+    default: false
+  debug:
+    title: 调试日志
+    description: 在 Stash 脚本日志中输出每次拦截/修改详情
+    type: switch
+    default: false
 
 rules:
   # 拦截 YouTube QUIC (UDP 443)，强制回退到 HTTPS/TCP 以便 MitM 生效
@@ -25,13 +48,14 @@ http:
     - ^https?://youtubei\.googleapis\.com/youtubei/v1/ad_break - reject-200
 
   script:
-    - match: ^https://youtubei\.googleapis\.com/youtubei/v1/(browse|next|player(\?|$)|search|get_watch|reel/reel_item_watch|reel/reel_watch_sequence)
+    - match: ^https://youtubei\.googleapis\.com/youtubei/v1/(browse|next|player(\?|$)|search|get_watch|guide|reel/reel_item_watch|reel/reel_watch_sequence)
       name: youtube-adblock
       type: response
       require-body: true
       binary-mode: true
       max-size: 5242880
       timeout: 10
+      argument: "bgPlay={{{bgPlay}}}&hideShorts={{{hideShorts}}}&hideUpload={{{hideUpload}}}&debug={{{debug}}}"
 
 script-providers:
   youtube-adblock:

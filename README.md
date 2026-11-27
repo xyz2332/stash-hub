@@ -6,7 +6,7 @@
 
 | 名称 | 说明 | 覆写链接 | 一键安装 |
 | :--- | :--- | :--- | :--- |
-| **YouTube AdBlock (iOS App)** | 去除 YouTube iOS App 首页信息流、推荐流、搜索结果、播放页横幅、片头/片中/片尾及 Shorts 广告 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/youtube-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/youtube-adblock.stoverride) |
+| **YouTube AdBlock & Enhance (iOS App)** | 去除 YouTube iOS App 全部广告，支持图形化开关解锁后台播放/画中画、隐藏 Shorts 与上传按钮 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/youtube-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/youtube-adblock.stoverride) |
 
 ## 目录结构
 
