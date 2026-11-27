@@ -6,8 +6,8 @@
 
 | 名称 | 说明 | 覆写链接 | 一键安装 |
 | :--- | :--- | :--- | :--- |
-| **YouTube AdBlock & Enhance (iOS App)** | 去广告、解锁后台播放与画中画、可选隐藏 Shorts 与上传按钮 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/youtube-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/youtube-adblock.stoverride) |
-| **Bilibili AdBlock (iOS App)** | 去开屏/信息流/暂停/详情页广告、空降助手跳过/标注恰饭广告、可选精简入口 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/bilibili-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/bilibili-adblock.stoverride) |
+| **YouTube AdBlock & Enhance (iOS App)** | 去除广告，支持后台播放与画中画、隐藏 Shorts 与上传按钮 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/youtube-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/youtube-adblock.stoverride) |
+| **Bilibili AdBlock (iOS App)** | 去除广告，支持空降助手跳过/标注恰饭广告、精简界面入口 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/bilibili-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/bilibili-adblock.stoverride) |
 
 ## 目录结构
 
