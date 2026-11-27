@@ -40,6 +40,20 @@ const ALBUM_PROMO_KEYS = [
   'album_story_tab_day_view_yike_operation_json',
 ];
 
+const SYSCFG_AD_AREAS = [
+  'iphone_splash_dynamic_waterfall_config_area',
+  'business_video_ad_area',
+  'document_advertisement_area',
+  'operational_activities_area',
+  'personal_activity_area',
+  'scan_all_tool_banner_area',
+];
+
+const SYSCFG_UI_AREAS = [
+  'coinCenter_area',
+  'bdpan_novel_widget_config_area',
+];
+
 function handleJson(obj) {
   if (!obj || typeof obj !== 'object') return false;
 
@@ -137,8 +151,22 @@ function handleJson(obj) {
         }
         if (changed) log('getsyscfg: cleared album_operation promo banners');
       }
+      for (const area of SYSCFG_AD_AREAS) {
+        if (obj[area] && Array.isArray(obj[area].cfg_list) && obj[area].cfg_list.length > 0) {
+          obj[area].cfg_list = [];
+          changed = true;
+          log(`getsyscfg: cleared ${area}`);
+        }
+      }
     }
     if (CFG.cleanUI) {
+      for (const area of SYSCFG_UI_AREAS) {
+        if (obj[area] && Array.isArray(obj[area].cfg_list) && obj[area].cfg_list.length > 0) {
+          obj[area].cfg_list = [];
+          changed = true;
+          log(`getsyscfg: cleared ${area}`);
+        }
+      }
       const genflow = obj.genflow_fe_sugs;
       if (genflow && Array.isArray(genflow.cfg_list)) {
         let gfChanged = false;
@@ -217,6 +245,15 @@ function handleJson(obj) {
   }
 
   // --- cleanUI endpoints ---
+
+  if (/\/api\/taskscore\/tasklist$/.test(URL_PATH)) {
+    if (!CFG.cleanUI || !obj.result || !Array.isArray(obj.result.list) || obj.result.list.length === 0) {
+      return false;
+    }
+    log(`api/taskscore/tasklist: cleared ${obj.result.list.length} task(s)`);
+    obj.result.list = [];
+    return true;
+  }
 
   if (/\/coins\/center\/notice$/.test(URL_PATH)) {
     if (!CFG.cleanUI || !obj.data || typeof obj.data !== 'object') return false;
