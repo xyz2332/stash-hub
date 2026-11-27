@@ -1,20 +1,32 @@
 /**
- * Bilibili iOS App AdBlock (Stash response script)
+ * Bilibili iOS App AdBlock & SponsorBlock (Stash response script)
  *
  * One binary-mode script entry serves both kinds of endpoints:
  *  - JSON (decoded from bytes): splash, home feed, story feed, tab layout
- *  - gRPC protobuf: View, RelatesFeed, DynAll, SearchAll
+ *  - gRPC protobuf:
+ *      AdBlock:      View, RelatesFeed, DynAll, SearchAll
+ *      SponsorBlock: PlayViewUnite (AD_FRAGMENT strip + ClipInfo auto-skip),
+ *                    ViewProgress (progress bar chapters),
+ *                    DmSegMobile (clickable "空降 MM:SS" danmaku)
  *
  * Arguments (from the override):
- *  - splash   (default: true)  empty the splash (launch screen) ad lists
- *  - feed     (default: true)  drop ad cards from home / story / dynamic / search feeds
- *  - view     (default: true)  drop the under-player ad and ad cards in related videos
- *  - hideTabs (default: false) remove activity tabs, game center and mall entries
- *  - debug    (default: false) log every modification
+ *  - splash       (default: true)  empty the splash (launch screen) ad lists
+ *  - feed         (default: true)  drop ad cards from home / story / dynamic / search feeds
+ *  - view         (default: true)  drop the under-player ad and ad cards in related videos
+ *  - sponsorBlock (default: true)  skip / mark in-video sponsor segments via bsbsb.top
+ *  - hideTabs     (default: false) remove activity tabs, game center and mall entries
+ *  - debug        (default: false) log every modification
  */
 
 function parseArguments() {
-  const cfg = { splash: true, feed: true, view: true, hideTabs: false, debug: false };
+  const cfg = {
+    splash: true,
+    feed: true,
+    view: true,
+    sponsorBlock: true,
+    hideTabs: false,
+    debug: false,
+  };
   if (typeof $argument !== 'string' || !$argument) return cfg;
   $argument.split('&').forEach((kv) => {
     const idx = kv.indexOf('=');
@@ -91,7 +103,7 @@ function handleJson(obj) {
 }
 
 // ---------------------------------------------------------------------------
-// Protobuf helpers (no schema; edits by field path)
+// Protobuf helpers (no schema; edits by field number/path)
 // ---------------------------------------------------------------------------
 
 function readVarint(b, i) {
@@ -117,6 +129,18 @@ function writeVarint(n) {
   return out;
 }
 
+function writeVarintBig(n) {
+  let v = BigInt(n);
+  if (v < 0n) v = BigInt.asUintN(64, v);
+  const out = [];
+  while (v > 0x7fn) {
+    out.push(Number((v & 0x7fn) | 0x80n));
+    v >>= 7n;
+  }
+  out.push(Number(v));
+  return out;
+}
+
 function cat(arrs) {
   let len = 0;
   for (const a of arrs) len += a.length;
@@ -129,7 +153,7 @@ function cat(arrs) {
   return r;
 }
 
-// Returns [{ f, wt, start, end, val }] or throws when the bytes are not a message.
+// Returns [{ f, wt, start, end, val, num }] or throws when the bytes are not a message.
 function parse(b) {
   const out = [];
   let i = 0;
@@ -141,8 +165,9 @@ function parse(b) {
     const wt = key & 7;
     if (f === 0) throw new Error('field 0');
     let val = null;
+    let num = 0;
     if (wt === 0) {
-      [, i] = readVarint(b, i);
+      [num, i] = readVarint(b, i);
     } else if (wt === 1) {
       i += 8;
     } else if (wt === 5) {
@@ -157,13 +182,54 @@ function parse(b) {
       throw new Error('wire type ' + wt);
     }
     if (i > b.length) throw new Error('truncated');
-    out.push({ f, wt, start, end: i, val });
+    out.push({ f, wt, start, end: i, val, num });
   }
   return out;
 }
 
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+function varintField(f, n) {
+  return Uint8Array.from([...writeVarint(f * 8), ...writeVarintBig(n)]);
+}
+
 function lenField(f, bytes) {
-  return cat([Uint8Array.from([...writeVarint((f << 3) | 2), ...writeVarint(bytes.length)]), bytes]);
+  return cat([Uint8Array.from([...writeVarint(f * 8 + 2), ...writeVarint(bytes.length)]), bytes]);
+}
+
+function strField(f, s) {
+  return lenField(f, enc.encode(s));
+}
+
+function unpackGrpc(raw) {
+  if (!raw || raw.length < 5) return null;
+  const flag = raw[0];
+  const n = ((raw[1] << 24) | (raw[2] << 16) | (raw[3] << 8) | raw[4]) >>> 0;
+  if (5 + n > raw.length) return null;
+  let msg = raw.slice(5, 5 + n);
+  if (flag === 1) msg = $utils.ungzip(msg);
+  return { flag, msg };
+}
+
+function packGrpc(flag, msg) {
+  const payload = flag === 1 ? $utils.gzip(msg) : msg;
+  const hdr = new Uint8Array(5);
+  hdr[0] = flag;
+  new DataView(hdr.buffer).setUint32(1, payload.length);
+  return cat([hdr, payload]);
+}
+
+function finishGrpc(out) {
+  if (!out) return $done({});
+  // Stash drops HTTP/2 trailers once the body is replaced; without grpc-status
+  // the client treats the call as failed and retries. Carry it in the headers.
+  const headers = Object.assign({}, $response.headers, {
+    'grpc-status': '0',
+    'grpc-message': '',
+    'bili-status-code': '0',
+  });
+  $done({ headers, body: out });
 }
 
 /**
@@ -202,8 +268,6 @@ function dropAt(buf, path, drop, stat) {
   return changed ? cat(parts) : null;
 }
 
-const enc = new TextEncoder();
-const dec = new TextDecoder();
 const AD_TYPE = enc.encode('type.googleapis.com/bilibili.ad.v1.');
 
 function contains(hay, needle) {
@@ -248,16 +312,13 @@ const GRPC_RULES = [
   ]],
 ];
 
-function handleGrpc(raw) {
+function handleStaticGrpc(raw) {
   const rule = GRPC_RULES.find(([on, re]) => re.test(URL_PATH) && on());
-  if (!rule || raw.length < 5) return null;
+  if (!rule) return null;
+  const g = unpackGrpc(raw);
+  if (!g) return null;
 
-  const flag = raw[0];
-  const n = ((raw[1] << 24) | (raw[2] << 16) | (raw[3] << 8) | raw[4]) >>> 0;
-  if (5 + n > raw.length) return null;
-  let msg = raw.slice(5, 5 + n);
-  if (flag === 1) msg = $utils.ungzip(msg);
-
+  let msg = g.msg;
   let changed = false;
   for (const [path, pred, label] of rule[2]) {
     const stat = { n: 0 };
@@ -268,13 +329,535 @@ function handleGrpc(raw) {
       log(`${URL_PATH.split('/').pop()}: ${label} x${stat.n}`);
     }
   }
-  if (!changed) return null;
+  return changed ? packGrpc(g.flag, msg) : null;
+}
 
-  const payload = flag === 1 ? $utils.gzip(msg) : msg;
-  const hdr = new Uint8Array(5);
-  hdr[0] = flag;
-  new DataView(hdr.buffer).setUint32(1, payload.length);
-  return cat([hdr, payload]);
+// ---------------------------------------------------------------------------
+// SponsorBlock (bsbsb.top)
+// ---------------------------------------------------------------------------
+
+const SB_CACHE_KEY = 'bili_sb_cache_v1';
+const SB_CACHE_TTL_MS = 10 * 60 * 1000;
+const SB_CACHE_MAX = 20;
+const SB_CATEGORIES = '["sponsor","selfpromo"]';
+const SB_LABELS = {
+  sponsor: '恰饭广告',
+  selfpromo: '自我推广',
+};
+
+function av2bv(aid) {
+  const XOR_CODE = 23442827791579n;
+  const MAX_AID = 1n << 51n;
+  const BASE = 58n;
+  const TABLE = 'FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf';
+  const bytes = ['B', 'V', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
+  let idx = 11;
+  let tmp = (MAX_AID | BigInt(aid)) ^ XOR_CODE;
+  while (tmp !== 0n) {
+    bytes[idx--] = TABLE[Number(tmp % BASE)];
+    tmp /= BASE;
+  }
+  [bytes[3], bytes[9]] = [bytes[9], bytes[3]];
+  [bytes[4], bytes[7]] = [bytes[7], bytes[4]];
+  return bytes.join('');
+}
+
+function formatTime(sec) {
+  const total = Math.max(0, Math.round(sec));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function readSbCache() {
+  try {
+    if (typeof $persistentStore === 'undefined') return {};
+    const raw = $persistentStore.read(SB_CACHE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function writeSbCache(cache) {
+  try {
+    if (typeof $persistentStore === 'undefined') return;
+    const keys = Object.keys(cache);
+    if (keys.length > SB_CACHE_MAX) {
+      keys.sort((a, b) => (cache[a].ts || 0) - (cache[b].ts || 0));
+      for (let i = 0; i < keys.length - SB_CACHE_MAX; i++) delete cache[keys[i]];
+    }
+    $persistentStore.write(JSON.stringify(cache), SB_CACHE_KEY);
+  } catch (e) {}
+}
+
+function updateCachedDuration(aid, cid, duration) {
+  if (!aid || !cid || !duration) return;
+  const key = `${aid}:${cid}`;
+  const cache = readSbCache();
+  if (cache[key]) {
+    cache[key].dur = duration;
+    writeSbCache(cache);
+  }
+}
+
+function normalizeSegments(list) {
+  if (!Array.isArray(list)) return [];
+  const raw = [];
+  for (const item of list) {
+    if (!item || !Array.isArray(item.segment) || item.segment.length < 2) continue;
+    if (item.actionType && item.actionType !== 'skip') continue;
+    const start = Number(item.segment[0]);
+    const end = Number(item.segment[1]);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < 2) continue;
+    raw.push({
+      start,
+      end,
+      label: SB_LABELS[item.category] || '推广广告',
+    });
+  }
+  raw.sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const seg of raw) {
+    const prev = merged[merged.length - 1];
+    if (prev && seg.start <= prev.end + 1) {
+      if (seg.end > prev.end) prev.end = seg.end;
+    } else {
+      merged.push(seg);
+    }
+  }
+  return merged;
+}
+
+function fetchSponsorSegments(aid, cid, durationHint, cb) {
+  if (!aid) return cb([], durationHint || 0);
+  const key = `${aid}:${cid || 0}`;
+  const now = Date.now();
+  const cache = readSbCache();
+  const hit = cache[key];
+  if (hit && now - hit.ts < SB_CACHE_TTL_MS) {
+    if (durationHint && !hit.dur) {
+      hit.dur = durationHint;
+      writeSbCache(cache);
+    }
+    return cb(hit.segs || [], durationHint || hit.dur || 0);
+  }
+
+  let bvid;
+  try {
+    bvid = av2bv(aid);
+  } catch (e) {
+    return cb([], durationHint || 0);
+  }
+
+  let url = `https://bsbsb.top/api/skipSegments?videoID=${encodeURIComponent(bvid)}&categories=${encodeURIComponent(SB_CATEGORIES)}`;
+  if (cid) url += `&cid=${cid}`;
+
+  $httpClient.get(
+    {
+      url,
+      headers: {
+        origin: 'stash-bili-adblock',
+        'x-ext-version': '1.0.0',
+      },
+      timeout: 3,
+    },
+    (err, resp, data) => {
+      if (err || !resp || (resp.status !== 200 && resp.status !== 404)) {
+        log(`sb lookup failed (${bvid}): ${err || (resp && resp.status)}`);
+        return cb([], durationHint || 0);
+      }
+      let segs = [];
+      if (resp.status === 200 && data) {
+        try {
+          segs = normalizeSegments(JSON.parse(data));
+        } catch (e) {
+          segs = [];
+        }
+      }
+      const latest = readSbCache();
+      latest[key] = { ts: Date.now(), segs, dur: durationHint || (latest[key] && latest[key].dur) || 0 };
+      writeSbCache(latest);
+      if (segs.length > 0) {
+        log(`sb hit ${bvid} (cid=${cid}): ${segs.map((s) => `${Math.round(s.start)}-${Math.round(s.end)}s`).join(', ')}`);
+      }
+      cb(segs, latest[key].dur);
+    }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PlayViewUnite: strip AD_FRAGMENT + inject ClipInfo & SKIPOPED(33)
+// ---------------------------------------------------------------------------
+
+function isAdFragmentVideo(b) {
+  try {
+    for (const fld of parse(b)) {
+      // FragmentVideoInfo.fragment_info (1) -> FragmentInfo.fragment_type (3) === 1 (AD_FRAGMENT)
+      if (fld.f === 1 && fld.wt === 2) {
+        for (const sub of parse(fld.val)) {
+          if (sub.f === 3 && sub.wt === 0 && sub.num === 1) return true;
+        }
+      }
+    }
+  } catch (e) {}
+  return false;
+}
+
+function enableSkipOpEdConf(playArcConfBytes) {
+  const fields = parse(playArcConfBytes);
+  const parts = [];
+  let found = false;
+  // map<int32, ArcConf> entry: key=33 (SKIPOPED), value=ArcConf{ is_support(1)=1 }
+  const skipEntry = lenField(1, cat([varintField(1, 33), lenField(2, varintField(1, 1))]));
+  for (const fld of fields) {
+    if (fld.f === 1 && fld.wt === 2) {
+      let key = -1;
+      try {
+        for (const kv of parse(fld.val)) {
+          if (kv.f === 1 && kv.wt === 0) {
+            key = kv.num;
+            break;
+          }
+        }
+      } catch (e) {}
+      if (key === 33) {
+        parts.push(skipEntry);
+        found = true;
+        continue;
+      }
+    }
+    parts.push(playArcConfBytes.subarray(fld.start, fld.end));
+  }
+  if (!found) parts.push(skipEntry);
+  return cat(parts);
+}
+
+function buildClipInfoBytes(segs) {
+  return segs.map((seg) =>
+    lenField(
+      6,
+      cat([
+        varintField(2, Math.floor(seg.start)),
+        varintField(3, Math.ceil(seg.end)),
+        varintField(4, 1), // CLIP_TYPE_OP
+        strField(5, '已跳过' + seg.label),
+      ])
+    )
+  );
+}
+
+const PGC_ANY_URL = 'type.googleapis.com/bilibili.app.playerunite.pgcanymodel.PGCAnyModel';
+const UGC_ANY_URL = 'type.googleapis.com/bilibili.app.playerunite.ugcanymodel.UGCAnyModel';
+
+function patchPlayViewUniteSupplement(existingAnyBytes, segs) {
+  const clipFields = buildClipInfoBytes(segs);
+  if (!existingAnyBytes) {
+    const business = cat(clipFields);
+    const pgcModel = lenField(3, business); // PGCAnyModel.business = 3
+    return cat([strField(1, PGC_ANY_URL), lenField(2, pgcModel)]);
+  }
+  const anyFields = parse(existingAnyBytes);
+  let typeUrl = '';
+  let anyVal = null;
+  for (const fld of anyFields) {
+    if (fld.f === 1 && fld.wt === 2) typeUrl = dec.decode(fld.val);
+    else if (fld.f === 2 && fld.wt === 2) anyVal = fld.val;
+  }
+
+  // If UGC without PlayLimit payload, replace with PGCAnyModel carrying business.clip_info
+  if (typeUrl === UGC_ANY_URL && (!anyVal || anyVal.length === 0)) {
+    const pgcModel = lenField(3, cat(clipFields));
+    return cat([strField(1, PGC_ANY_URL), lenField(2, pgcModel)]);
+  }
+
+  // If already PGCAnyModel, append clip_info into its business (field 3)
+  if (typeUrl === PGC_ANY_URL) {
+    const pgcFields = anyVal ? parse(anyVal) : [];
+    const pgcParts = [];
+    let hasBiz = false;
+    for (const pf of pgcFields) {
+      if (pf.f === 3 && pf.wt === 2) {
+        hasBiz = true;
+        pgcParts.push(lenField(3, cat([pf.val, ...clipFields])));
+      } else {
+        pgcParts.push(anyVal.subarray(pf.start, pf.end));
+      }
+    }
+    if (!hasBiz) pgcParts.push(lenField(3, cat(clipFields)));
+    return cat([strField(1, PGC_ANY_URL), lenField(2, cat(pgcParts))]);
+  }
+
+  // Keep non-empty UGCAnyModel (e.g. PlayLimit) untouched
+  return null;
+}
+
+function handlePlayViewUnite(raw) {
+  const g = unpackGrpc(raw);
+  if (!g) return finishGrpc(null);
+  let msg = g.msg;
+  let changed = false;
+
+  // 1) Always strip official AD_FRAGMENT entries in field 10 (FragmentVideo)
+  const adStat = { n: 0 };
+  const stripped = dropAt(msg, [10, 1], isAdFragmentVideo, adStat);
+  if (stripped) {
+    msg = stripped;
+    changed = true;
+    log(`PlayViewUnite: AD_FRAGMENT x${adStat.n}`);
+  }
+
+  // Extract aid, cid, duration from PlayArc (field 6)
+  let aid = 0;
+  let cid = 0;
+  let duration = 0;
+  try {
+    for (const fld of parse(msg)) {
+      if (fld.f === 6 && fld.wt === 2) {
+        for (const af of parse(fld.val)) {
+          if (af.f === 2 && af.wt === 0) aid = af.num;
+          else if (af.f === 3 && af.wt === 0) cid = af.num;
+          else if (af.f === 8 && af.wt === 0) duration = af.num;
+        }
+      }
+    }
+  } catch (e) {}
+
+  fetchSponsorSegments(aid, cid, duration, (segs) => {
+    try {
+      if (segs.length > 0) {
+        const fields = parse(msg);
+        const parts = [];
+        let patchedSupp = false;
+        let hasArcConf = false;
+        let hasSupp = false;
+        for (const fld of fields) {
+          if (fld.f === 2 && fld.wt === 2) {
+            hasArcConf = true;
+            parts.push(lenField(2, enableSkipOpEdConf(fld.val)));
+          } else if (fld.f === 5 && fld.wt === 2) {
+            hasSupp = true;
+            const ns = patchPlayViewUniteSupplement(fld.val, segs);
+            if (ns) {
+              parts.push(lenField(5, ns));
+              patchedSupp = true;
+            } else {
+              parts.push(msg.subarray(fld.start, fld.end));
+            }
+          } else {
+            parts.push(msg.subarray(fld.start, fld.end));
+          }
+        }
+        if (!hasArcConf) parts.push(lenField(2, enableSkipOpEdConf(new Uint8Array(0))));
+        if (!hasSupp) {
+          parts.push(lenField(5, patchPlayViewUniteSupplement(null, segs)));
+          patchedSupp = true;
+        }
+        if (patchedSupp) {
+          msg = cat(parts);
+          changed = true;
+          log(`PlayViewUnite: injected ${segs.length} ClipInfo segment(s)`);
+        }
+      }
+      finishGrpc(changed ? packGrpc(g.flag, msg) : null);
+    } catch (e) {
+      log('PlayViewUnite inject err: ' + e.message);
+      finishGrpc(changed ? packGrpc(g.flag, msg) : null);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ViewProgress: inject VideoViewPoint progress-bar chapters
+// ---------------------------------------------------------------------------
+
+function buildVideoPoints(segs, duration) {
+  const points = [];
+  let cursor = 0;
+  for (const seg of segs) {
+    const s = Math.floor(seg.start);
+    const e = Math.ceil(seg.end);
+    if (s > cursor) {
+      points.push({ from: cursor, to: s, content: '正片' });
+    }
+    points.push({ from: s, to: e, content: '⏩ ' + seg.label });
+    cursor = Math.max(cursor, e);
+  }
+  if (duration > cursor) {
+    points.push({ from: cursor, to: Math.ceil(duration), content: '正片' });
+  }
+  return points.map((p) =>
+    lenField(
+      1,
+      cat([
+        varintField(1, 2), // type = 2 (chapter / segment)
+        varintField(2, p.from),
+        varintField(3, p.to),
+        strField(4, p.content),
+      ])
+    )
+  );
+}
+
+function handleViewProgress(raw) {
+  const g = unpackGrpc(raw);
+  const reqG = unpackGrpc($request.body);
+  if (!g || !reqG) return finishGrpc(null);
+
+  let aid = 0;
+  let cid = 0;
+  try {
+    for (const fld of parse(reqG.msg)) {
+      if (fld.f === 1 && fld.wt === 0) aid = fld.num;
+      else if (fld.f === 2 && fld.wt === 0) cid = fld.num;
+    }
+  } catch (e) {}
+
+  fetchSponsorSegments(aid, cid, 0, (segs, duration) => {
+    try {
+      if (segs.length === 0) return finishGrpc(null);
+      const pointEntries = buildVideoPoints(segs, duration);
+      if (pointEntries.length === 0) return finishGrpc(null);
+
+      // ViewProgressReply.video_guide (1) -> VideoGuide.video_point (2) -> VideoViewPoint
+      const fields = parse(g.msg);
+      const parts = [];
+      let hasGuide = false;
+
+      for (const fld of fields) {
+        if (fld.f === 1 && fld.wt === 2) {
+          hasGuide = true;
+          const gFields = parse(fld.val);
+          const gParts = [];
+          let hasVP = false;
+          for (const gf of gFields) {
+            if (gf.f === 2 && gf.wt === 2) {
+              hasVP = true;
+              // Append ad markers to existing chapters & ensure point_permanent=1
+              const vpFields = parse(gf.val);
+              const vpParts = [];
+              let hasPerm = false;
+              for (const vf of vpFields) {
+                if (vf.f === 3 && vf.wt === 0) {
+                  hasPerm = true;
+                  vpParts.push(varintField(3, 1));
+                } else {
+                  vpParts.push(gf.val.subarray(vf.start, vf.end));
+                }
+              }
+              const adOnly = segs.map((seg) =>
+                lenField(
+                  1,
+                  cat([
+                    varintField(1, 2),
+                    varintField(2, Math.floor(seg.start)),
+                    varintField(3, Math.ceil(seg.end)),
+                    strField(4, '⏩ ' + seg.label),
+                  ])
+                )
+              );
+              vpParts.push(...adOnly);
+              if (!hasPerm) vpParts.push(varintField(3, 1));
+              gParts.push(lenField(2, cat(vpParts)));
+            } else {
+              gParts.push(fld.val.subarray(gf.start, gf.end));
+            }
+          }
+          if (!hasVP) {
+            gParts.push(lenField(2, cat([...pointEntries, varintField(3, 1)])));
+          }
+          parts.push(lenField(1, cat(gParts)));
+        } else {
+          parts.push(g.msg.subarray(fld.start, fld.end));
+        }
+      }
+
+      if (!hasGuide) {
+        const vp = cat([...pointEntries, varintField(3, 1)]);
+        parts.push(lenField(1, lenField(2, vp)));
+      }
+
+      log(`ViewProgress: injected ${segs.length} sponsor chapter(s)`);
+      finishGrpc(packGrpc(g.flag, cat(parts)));
+    } catch (e) {
+      log('ViewProgress inject err: ' + e.message);
+      finishGrpc(null);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// DmSegMobile: inject clickable "空降 MM:SS" danmaku at sponsor start
+// ---------------------------------------------------------------------------
+
+function handleDmSegMobile(raw) {
+  const g = unpackGrpc(raw);
+  const reqG = unpackGrpc($request.body);
+  if (!g || !reqG) return finishGrpc(null);
+
+  let aid = 0;
+  let cid = 0;
+  let type = 0;
+  let segIdx = 1;
+  let duration = 0;
+  try {
+    for (const fld of parse(reqG.msg)) {
+      if (fld.f === 1 && fld.wt === 0) aid = fld.num;
+      else if (fld.f === 2 && fld.wt === 0) cid = fld.num;
+      else if (fld.f === 3 && fld.wt === 0) type = fld.num;
+      else if (fld.f === 4 && fld.wt === 0) segIdx = fld.num;
+      else if (fld.f === 11 && fld.wt === 2) {
+        try {
+          const j = JSON.parse(dec.decode(fld.val));
+          if (j && j.duration) duration = Math.round(j.duration / 1000);
+        } catch (e) {}
+      }
+    }
+  } catch (e) {}
+
+  if (type !== 1 || !aid) return finishGrpc(null);
+  if (duration) updateCachedDuration(aid, cid, duration);
+
+  fetchSponsorSegments(aid, cid, duration, (segs) => {
+    try {
+      const winStart = (segIdx - 1) * 360;
+      const winEnd = segIdx * 360;
+      const inWin = segs.filter((s) => s.start >= winStart && s.start < winEnd);
+      if (inWin.length === 0) return finishGrpc(null);
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const injected = inWin.map((seg, idx) => {
+        const dmId = 9000000000000000000n + BigInt(segIdx * 100 + idx);
+        const progressMs = Math.max(500, Math.round(seg.start * 1000));
+        const text = `空降 ${formatTime(seg.end)} (${seg.label})`;
+        return lenField(
+          1,
+          cat([
+            varintField(1, dmId),
+            varintField(2, progressMs),
+            varintField(3, 5),        // mode = 5 (top pinned)
+            varintField(4, 25),       // fontsize = 25
+            varintField(5, 0xffcc00), // amber highlight
+            strField(6, '00000000'),  // midHash
+            strField(7, text),        // content
+            varintField(8, nowSec),   // ctime
+            varintField(9, 10),       // weight = 10 (highest)
+            varintField(11, 0),       // pool = 0
+            strField(12, dmId.toString()),
+          ])
+        );
+      });
+
+      log(`DmSegMobile(seg=${segIdx}): injected ${injected.length} airdrop danmaku`);
+      finishGrpc(packGrpc(g.flag, cat([g.msg, ...injected])));
+    } catch (e) {
+      log('DmSegMobile inject err: ' + e.message);
+      finishGrpc(null);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -286,23 +869,28 @@ function handleGrpc(raw) {
 
     // JSON endpoints live under /x/; binary-mode hands them over as decoded bytes.
     if (typeof body === 'string' || /^https:\/\/app\.bilibili\.com\/x\//.test(URL_PATH)) {
-      const text = typeof body === 'string' ? body : new TextDecoder().decode(body);
+      const text = typeof body === 'string' ? body : dec.decode(body);
       const obj = JSON.parse(text);
       if (!handleJson(obj)) return $done({});
       const out = JSON.stringify(obj);
-      return $done({ body: typeof body === 'string' ? out : new TextEncoder().encode(out) });
+      return $done({ body: typeof body === 'string' ? out : enc.encode(out) });
     }
 
-    const out = handleGrpc(body);
-    if (!out) return $done({});
-    // Stash drops HTTP/2 trailers once the body is replaced; without grpc-status
-    // the client treats the call as failed and retries. Carry it in the headers.
-    const headers = Object.assign({}, $response.headers, {
-      'grpc-status': '0',
-      'grpc-message': '',
-      'bili-status-code': '0',
-    });
-    $done({ headers, body: out });
+    // Async SponsorBlock gRPC endpoints
+    if (CFG.sponsorBlock) {
+      if (/\/bilibili\.app\.playerunite\.v1\.Player\/PlayViewUnite$/.test(URL_PATH)) {
+        return handlePlayViewUnite(body);
+      }
+      if (/\/bilibili\.app\.viewunite\.v1\.View\/ViewProgress$/.test(URL_PATH)) {
+        return handleViewProgress(body);
+      }
+      if (/\/bilibili\.community\.service\.dm\.v1\.DM\/DmSegMobile$/.test(URL_PATH)) {
+        return handleDmSegMobile(body);
+      }
+    }
+
+    // Synchronous AdBlock gRPC endpoints
+    finishGrpc(handleStaticGrpc(body));
   } catch (e) {
     console.log('[bili-adblock] error: ' + (e && e.message ? e.message : e));
     $done({});

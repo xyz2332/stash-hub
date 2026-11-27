@@ -1,5 +1,5 @@
 name: Bilibili AdBlock (iOS App)
-desc: 去除哔哩哔哩 iOS App 开屏、首页/竖屏/动态/搜索信息流广告，以及视频详情页的播放器下方广告与相关推荐广告
+desc: 去除哔哩哔哩 iOS App 开屏、首页/竖屏/动态/搜索信息流广告、视频详情页广告，并支持通过空降助手跳过/标注视频内恰饭广告
 category: AdBlock
 arguments-version: 1
 
@@ -17,6 +17,11 @@ arguments:
   view:
     title: 去除视频详情页广告
     description: 播放器下方广告卡片，以及相关推荐中的广告
+    type: switch
+    default: true
+  sponsorBlock:
+    title: 跳过视频中广告 (空降助手)
+    description: 接入 BilibiliSponsorBlock，跳过/标注视频内恰饭与推广片段，并剥离官方插播广告
     type: switch
     default: true
   hideTabs:
@@ -41,14 +46,14 @@ http:
     - "grpc.biliapi.net"
 
   script:
-    - match: ^https://(app\.bilibili\.com/x/(v2/splash/(list|show)|v2/feed/index(/story)?|resource/show/tab/v2)\?|(grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.(app\.viewunite\.v1\.View/(View|RelatesFeed)|app\.dynamic\.v2\.Dynamic/DynAll|polymer\.app\.search\.v1\.Search/SearchAll)$)
+    - match: ^https://(app\.bilibili\.com/x/(v2/splash/(list|show)|v2/feed/index(/story)?|resource/show/tab/v2)\?|(grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.(app\.viewunite\.v1\.View/(View|RelatesFeed|ViewProgress)|app\.playerunite\.v1\.Player/PlayViewUnite|community\.service\.dm\.v1\.DM/DmSegMobile|app\.dynamic\.v2\.Dynamic/DynAll|polymer\.app\.search\.v1\.Search/SearchAll)$)
       name: bilibili-adblock
       type: response
       require-body: true
       binary-mode: true
       max-size: 5242880
       timeout: 10
-      argument: "splash=${args.splash}&feed=${args.feed}&view=${args.view}&hideTabs=${args.hideTabs}&debug=${args.debug}"
+      argument: "splash=${args.splash}&feed=${args.feed}&view=${args.view}&sponsorBlock=${args.sponsorBlock}&hideTabs=${args.hideTabs}&debug=${args.debug}"
 
 script-providers:
   bilibili-adblock:
