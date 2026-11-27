@@ -122,20 +122,47 @@ function handleJson(obj) {
   }
 
   if (/\/api\/getsyscfg$/.test(URL_PATH)) {
-    if (!CFG.adBlock) return false;
-    const albumCfg = obj.public_album_config;
-    if (!albumCfg || !Array.isArray(albumCfg.cfg_list)) return false;
     let changed = false;
-    for (const node of albumCfg.cfg_list) {
-      if (!node || node.node_key !== 'album_operation') continue;
-      for (const k of ALBUM_PROMO_KEYS) {
-        if (node[k]) {
-          node[k] = '';
+    if (CFG.adBlock) {
+      const albumCfg = obj.public_album_config;
+      if (albumCfg && Array.isArray(albumCfg.cfg_list)) {
+        for (const node of albumCfg.cfg_list) {
+          if (!node || node.node_key !== 'album_operation') continue;
+          for (const k of ALBUM_PROMO_KEYS) {
+            if (node[k]) {
+              node[k] = '';
+              changed = true;
+            }
+          }
+        }
+        if (changed) log('getsyscfg: cleared album_operation promo banners');
+      }
+    }
+    if (CFG.cleanUI) {
+      const genflow = obj.genflow_fe_sugs;
+      if (genflow && Array.isArray(genflow.cfg_list)) {
+        let gfChanged = false;
+        for (const node of genflow.cfg_list) {
+          if (!node) continue;
+          if (node.genflow_home_sug) {
+            node.genflow_home_sug = '{"sugs":[]}';
+            gfChanged = true;
+          }
+          if (node.personaAgentMemoryQuery) {
+            node.personaAgentMemoryQuery = '';
+            gfChanged = true;
+          }
+          if (node.proactiveFoldAllTitle) {
+            node.proactiveFoldAllTitle = '';
+            gfChanged = true;
+          }
+        }
+        if (gfChanged) {
           changed = true;
+          log('getsyscfg: cleared genflow_fe_sugs');
         }
       }
     }
-    if (changed) log('getsyscfg: cleared album_operation promo banners');
     return changed;
   }
 
