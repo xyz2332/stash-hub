@@ -1,0 +1,39 @@
+name: YouTube AdBlock (iOS App)
+desc: 去除 YouTube iOS App 首页信息流、搜索结果、播放页横幅、片头/片中/片尾及 Shorts 广告
+category: AdBlock
+
+rules:
+  # 拦截 YouTube QUIC (UDP 443)，强制回退到 HTTPS/TCP 以便 MitM 生效
+  - AND,((DOMAIN-SUFFIX,youtubei.googleapis.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  - AND,((DOMAIN-SUFFIX,youtube.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  - AND,((DOMAIN-SUFFIX,googlevideo.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+
+http:
+  mitm:
+    - "youtubei.googleapis.com"
+    - "*.youtube.com"
+    # 如需同时拦截 googlevideo 的 &oad 广告播放初始化请求，可取消下面注释（会增加视频流解密开销）：
+    # - "*.googlevideo.com"
+
+  url-rewrite:
+    - ^https?://(www|m|s)\.youtube\.com/pagead/ - reject-200
+    - ^https?://(www|m|s)\.youtube\.com/api/stats/ads - reject-200
+    - ^https?://(www|m|s)\.youtube\.com/get_midroll_info - reject-200
+    - ^https?://(www|m|s)\.youtube\.com/ptracking - reject-200
+    - ^https?://youtubei\.googleapis\.com/youtubei/v1/ad_break - reject-200
+    # 配合上面的 *.googlevideo.com MitM 使用：
+    # - ^https?://[\w-]+\.googlevideo\.com/initplayback.+&oad - reject-200
+
+  script:
+    - match: ^https://youtubei\.googleapis\.com/youtubei/v1/(browse|next|player|search|get_watch|reel/reel_item_watch|reel/reel_watch_sequence)
+      name: youtube-adblock
+      type: response
+      require-body: true
+      binary-mode: true
+      max-size: 5242880
+      timeout: 10
+
+script-providers:
+  youtube-adblock:
+    url: https://raw.githubusercontent.com/xyz2332/stash-hub/main/scripts/youtube-adblock.js
+    interval: 86400

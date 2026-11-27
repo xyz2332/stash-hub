@@ -1,0 +1,33 @@
+name: Lint Overrides & Scripts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check JS syntax
+        run: |
+          shopt -s globstar nullglob
+          for f in scripts/**/*.js; do
+            echo "Checking $f"
+            node --check "$f"
+          done
+
+      - name: Check YAML syntax (.stoverride)
+        run: |
+          python3 -c '
+          import glob, sys, yaml
+          files = glob.glob("overrides/**/*.stoverride", recursive=True)
+          for path in files:
+              print("Checking", path)
+              with open(path, encoding="utf-8") as fh:
+                  data = yaml.safe_load(fh)
+              if not isinstance(data, dict):
+                  sys.exit(f"Invalid YAML mapping: {path}")
+          '
