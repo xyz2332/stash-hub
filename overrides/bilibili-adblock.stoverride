@@ -52,5 +52,5 @@ http:
 
 script-providers:
   bilibili-adblock:
-    url: https://raw.githubusercontent.com/xyz2332/stash-hub/fa2ae8cbd6d3273ada22efeb4dd41ad9ffc7c042/scripts/bilibili-adblock.js
+    url: https://raw.githubusercontent.com/xyz2332/stash-hub/main/scripts/bilibili-adblock.js
     interval: 86400
