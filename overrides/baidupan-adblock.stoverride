@@ -1,0 +1,85 @@
+name: Baidu Netdisk AdBlock (iOS App)
+desc: 去除百度网盘 iOS App 开屏、弹窗、激励视频与相册推广广告，拦截第三方广告 SDK，并精简游戏中心、金币气泡、小说/短剧与营销推荐
+category: AdBlock
+arguments-version: 1
+
+arguments:
+  adBlock:
+    title: 去除开屏与弹窗/激励广告
+    description: 清空活动弹窗与通栏横幅（activityentry）、看广告解锁权益提示（pcs/adv）、系统广告开关（getconfig）及相册一刻推广（getsyscfg）
+    type: switch
+    default: true
+  cleanUI:
+    title: 精简界面冗余元素
+    description: 移除游戏中心、我的页面金币/红包气泡、首页金刚区小说/短剧、搜索框大促底纹、AI 热点灵感卡片及第三方打印/视频小程序推广
+    type: switch
+    default: true
+  debug:
+    title: 调试日志
+    description: 在 Stash 脚本日志中输出每次拦截/修改详情
+    type: switch
+    default: false
+
+rules:
+  # 拦截百度网盘 QUIC (UDP 443)，强制回退到 HTTPS/TCP 以便 MitM 生效
+  - AND,((DOMAIN-SUFFIX,pan.baidu.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  # 拦截百度自家广告与穿山甲 / 优量汇 / 快手等第三方广告 SDK
+  - DOMAIN,mobads.baidu.com,REJECT
+  - DOMAIN,mobads-pre-config.cdn.bcebos.com,REJECT
+  - DOMAIN,afd.baidu.com,REJECT
+  - DOMAIN,afdconf.baidu.com,REJECT
+  - DOMAIN,cpro.baidu.com,REJECT
+  - DOMAIN,pos.baidu.com,REJECT
+  - DOMAIN,wn.pos.baidu.com,REJECT
+  - DOMAIN,h2tcbox.baidu.com,REJECT
+  - DOMAIN-SUFFIX,pangolin-sdk-toutiao.com,REJECT
+  - DOMAIN-SUFFIX,pangolin-sdk-toutiao1.com,REJECT
+  - DOMAIN-SUFFIX,pangolin-sdk-toutiao-b.com,REJECT
+  - DOMAIN-SUFFIX,pangolin-sdk-toutiao-b1.com,REJECT
+  - DOMAIN-SUFFIX,pglstatp-toutiao.com,REJECT
+  - DOMAIN,v2mi.gdt.qq.com,REJECT
+  - DOMAIN,mi.gdt.qq.com,REJECT
+  - DOMAIN,v.gdt.qq.com,REJECT
+  - DOMAIN,sdk.e.qq.com,REJECT
+  - DOMAIN,sdkquic.e.qq.com,REJECT
+  - DOMAIN,pgdt.ugdtimg.com,REJECT
+  - DOMAIN,pgdt.gtimg.cn,REJECT
+  - DOMAIN-SUFFIX,adkwai.com,REJECT
+  - DOMAIN-SUFFIX,advlion.com,REJECT
+  - DOMAIN-SUFFIX,vlion.cn,REJECT
+  - DOMAIN-SUFFIX,yunxish.com,REJECT
+  - DOMAIN-SUFFIX,mentamob.com,REJECT
+  - DOMAIN-SUFFIX,1rtb.net,REJECT
+  - DOMAIN-SUFFIX,1rtb.com,REJECT
+  - DOMAIN-SUFFIX,beizi.biz,REJECT
+  - DOMAIN-SUFFIX,leadmoad.com,REJECT
+  - DOMAIN-SUFFIX,adwangmai.com,REJECT
+  - DOMAIN-SUFFIX,66mobi.com,REJECT
+  - DOMAIN-SUFFIX,funlinkads.com,REJECT
+  - DOMAIN-SUFFIX,massx.com,REJECT
+  - DOMAIN-SUFFIX,zhangyuyidong.cn,REJECT
+  - DOMAIN-SUFFIX,adintl.cn,REJECT
+  - DOMAIN-SUFFIX,ubixioe.com,REJECT
+
+http:
+  mitm:
+    - "pan.baidu.com"
+
+  url-rewrite:
+    # 拦截网盘广告埋点上报与 DSP 竞价接口
+    - ^https?://pan\.baidu\.com/buy/ad/analytics - reject-200
+    - ^https?://pan\.baidu\.com/rest/2\.0/membership/advertise/dsp - reject-200
+
+  script:
+    - match: ^https?://pan\.baidu\.com/(act/api/activityentry|rest/2\.0/pcs/adv|api/getconfig|api/getsyscfg|buy/ad/(conf|get)|coins/center/notice|feed/kingkongdistrict|act/v2/(gamecenter/(recommend|gametaskinfo|historyplay)|lifeguide/home|ipcultivate/noticelist)|recommend/(searchbox/bottom|shortseries/list|yunyiduo/personal)|aisearch/kukuai/inspirationcards|rest/2\.0/xpan/smartprogram)(\?|$)
+      name: baidupan-adblock
+      type: response
+      require-body: true
+      max-size: 5242880
+      timeout: 10
+      argument: "adBlock=${args.adBlock}&cleanUI=${args.cleanUI}&debug=${args.debug}"
+
+script-providers:
+  baidupan-adblock:
+    url: https://raw.githubusercontent.com/xyz2332/stash-hub/main/scripts/baidupan-adblock.js
+    interval: 86400
