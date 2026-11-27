@@ -568,7 +568,21 @@ function getReqHeader(name) {
   return '';
 }
 
+function getBiliVersion() {
+  const ua = getReqHeader('user-agent');
+  const m = ua.match(/bili-[^/]+\/(\d+)/);
+  return m ? Number(m[1]) : 0;
+}
+
+// Bilibili iOS >= 9.17.0 (91700000) enforces Chronos signature verification,
+// so unsigned Chronos bundles are rejected. Only enable Chronos auto-skip on < 9.17.0.
+function isChronosAirborneSupported() {
+  const ver = getBiliVersion();
+  return ver > 0 && ver < 91700000;
+}
+
 function patchChronosField(chronosBytes) {
+  if (!isChronosAirborneSupported()) return null;
   const inner = parse(chronosBytes);
   let md5 = '';
   for (const fld of inner) {
@@ -770,36 +784,63 @@ function handleDmSegMobile(raw) {
         }
       } catch (e) {}
 
+      const useChronos = isChronosAirborneSupported();
+      const nowSec = Math.floor(Date.now() / 1000);
       const injected = [];
-      for (const seg of inWin) {
-        const startMs = Math.min(Math.round(seg.end * 1000) - 500, Math.round(seg.start * 1000) + 2000);
+      for (let i = 0; i < inWin.length; i++) {
+        const seg = inWin[i];
         const endMs = Math.round(seg.end * 1000);
-        if (startMs >= endMs) continue;
-        const action = 'airborne:' + endMs;
-        if (existingActions.has(action)) continue;
-        const dmId = 900000000 + Math.floor(startMs);
-        injected.push(
-          lenField(
-            1,
-            cat([
-              varintField(1, dmId),
-              varintField(2, startMs),
-              varintField(3, 5),         // mode = 5 (top)
-              varintField(4, 50),        // fontsize = 50
-              varintField(5, 16777215),  // white
-              strField(6, '1948dd5d'),   // midHash
-              strField(7, '空指部已就位'), // Chronos airborne trigger text
-              varintField(8, 1735660800),
-              varintField(9, 11),        // weight = 11
-              strField(10, action),      // airborne:<endMs>
-              strField(12, String(dmId)),
-              varintField(13, 1310724),  // attr
-              varintField(25, 1),        // type
-              varintField(26, cid),      // oid
-              varintField(27, 1),        // dm_from
-            ])
-          )
-        );
+        if (useChronos) {
+          const startMs = Math.min(endMs - 500, Math.round(seg.start * 1000) + 2000);
+          if (startMs >= endMs) continue;
+          const action = 'airborne:' + endMs;
+          if (existingActions.has(action)) continue;
+          const dmId = 900000000 + Math.floor(startMs);
+          injected.push(
+            lenField(
+              1,
+              cat([
+                varintField(1, dmId),
+                varintField(2, startMs),
+                varintField(3, 5),         // mode = 5 (top)
+                varintField(4, 50),        // fontsize = 50
+                varintField(5, 16777215),  // white
+                strField(6, '1948dd5d'),   // midHash
+                strField(7, '空指部已就位'), // Chronos airborne trigger text
+                varintField(8, 1735660800),
+                varintField(9, 11),        // weight = 11
+                strField(10, action),      // airborne:<endMs>
+                strField(12, String(dmId)),
+                varintField(13, 1310724),  // attr
+                varintField(25, 1),        // type
+                varintField(26, cid),      // oid
+                varintField(27, 1),        // dm_from
+              ])
+            )
+          );
+        } else {
+          const startMs = Math.max(500, Math.round(seg.start * 1000));
+          const dmId = 9000000000000000000n + BigInt(segIdx * 100 + i);
+          const text = `⏩ ${seg.label}至 ${formatTime(seg.end)}（点进度条下一段跳过）`;
+          injected.push(
+            lenField(
+              1,
+              cat([
+                varintField(1, dmId),
+                varintField(2, startMs),
+                varintField(3, 5),        // mode = 5 (top)
+                varintField(4, 25),       // fontsize = 25
+                varintField(5, 0xffcc00), // amber highlight
+                strField(6, '00000000'),
+                strField(7, text),
+                varintField(8, nowSec),
+                varintField(9, 10),
+                varintField(11, 0),
+                strField(12, dmId.toString()),
+              ])
+            )
+          );
+        }
       }
       if (injected.length === 0) return finishGrpc(null);
 
