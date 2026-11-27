@@ -166,6 +166,56 @@ function handleJson(obj) {
     return changed;
   }
 
+  if (/\/api\/notice\/list$/.test(URL_PATH)) {
+    if (!CFG.adBlock || !obj.data || !Array.isArray(obj.data.list) || obj.data.list.length === 0) {
+      return false;
+    }
+    log(`api/notice/list: cleared ${obj.data.list.length} promo notice(s)`);
+    obj.data.list = [];
+    return true;
+  }
+
+  if (/\/rest\/2\.0\/membership\/product$/.test(URL_PATH)) {
+    if (!CFG.adBlock || !obj.data || typeof obj.data !== 'object') return false;
+    const d = obj.data;
+    let changed = false;
+    if (d.secondary_ad_video && d.secondary_ad_video !== '0') {
+      d.secondary_ad_video = '0';
+      changed = true;
+    }
+    for (const k of ['advanced_search_before_banner', 'advanced_search_after_banner', 'guide_transfer_nahalffloating']) {
+      if (d[k]) {
+        d[k] = 0;
+        changed = true;
+      }
+    }
+    if (changed) log('membership/product: disabled ad/banner flags');
+    return changed;
+  }
+
+  if (/\/rest\/2\.0\/membership\/user$/.test(URL_PATH)) {
+    if (!CFG.cleanUI) return false;
+    let changed = false;
+    if (obj.new_guide_data && Array.isArray(obj.new_guide_data.sub_card_list) && obj.new_guide_data.sub_card_list.length > 0) {
+      obj.new_guide_data.sub_card_list = [];
+      changed = true;
+    }
+    if (obj.v10_guide) {
+      delete obj.v10_guide;
+      changed = true;
+    }
+    if (obj.tips_data && obj.tips_data.title) {
+      obj.tips_data = {};
+      changed = true;
+    }
+    if (Array.isArray(obj.tips_data_list) && obj.tips_data_list.length > 0) {
+      obj.tips_data_list = [];
+      changed = true;
+    }
+    if (changed) log('membership/user?method=guide: cleared My-page promo cards/tips');
+    return changed;
+  }
+
   // --- cleanUI endpoints ---
 
   if (/\/coins\/center\/notice$/.test(URL_PATH)) {

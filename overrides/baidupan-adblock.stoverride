@@ -71,7 +71,7 @@ http:
     - ^https?://pan\.baidu\.com/rest/2\.0/membership/advertise/dsp - reject-200
 
   script:
-    - match: ^https?://pan\.baidu\.com/(act/api/activityentry|rest/2\.0/pcs/adv|api/getconfig|api/getsyscfg|buy/ad/(conf|get)|coins/center/notice|feed/kingkongdistrict|act/v2/(gamecenter/(recommend|gametaskinfo|historyplay)|lifeguide/home|ipcultivate/noticelist)|recommend/(searchbox/bottom|shortseries/list|yunyiduo/personal)|aisearch/kukuai/inspirationcards|rest/2\.0/xpan/smartprogram)(\?|$)
+    - match: ^https?://pan\.baidu\.com/(act/api/activityentry|rest/2\.0/pcs/adv|api/getconfig|api/getsyscfg|api/notice/list|buy/ad/(conf|get)|coins/center/notice|feed/kingkongdistrict|act/v2/(gamecenter/(recommend|gametaskinfo|historyplay)|lifeguide/home|ipcultivate/noticelist)|recommend/(searchbox/bottom|shortseries/list|yunyiduo/personal)|aisearch/kukuai/inspirationcards|rest/2\.0/xpan/smartprogram|rest/2\.0/membership/(product\?.*method=abconfig|user\?.*method=guide))(\?|$|&)
       name: baidupan-adblock
       type: response
       require-body: true
