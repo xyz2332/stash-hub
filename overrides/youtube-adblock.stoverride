@@ -1,5 +1,5 @@
 name: YouTube AdBlock (iOS App)
-desc: 去除 YouTube iOS App 首页信息流、搜索结果、播放页横幅、片头/片中/片尾及 Shorts 广告
+desc: 去除 YouTube iOS App 首页信息流、推荐流、搜索结果、播放页横幅、片头/片中/片尾及 Shorts 广告
 category: AdBlock
 
 rules:
@@ -12,20 +12,20 @@ http:
   mitm:
     - "youtubei.googleapis.com"
     - "*.youtube.com"
-    # 如需同时拦截 googlevideo 的 &oad 广告播放初始化请求，可取消下面注释（会增加视频流解密开销）：
-    # - "*.googlevideo.com"
+    - "*.googlevideo.com"
 
   url-rewrite:
+    # 拦截 Onesie 初始化播放请求，强制回退到 /youtubei/v1/player 以便脚本剥离片头/片中广告
+    - ^https?://[\w-]+\.googlevideo\.com/initplayback - reject
     - ^https?://(www|m|s)\.youtube\.com/pagead/ - reject-200
     - ^https?://(www|m|s)\.youtube\.com/api/stats/ads - reject-200
+    - ^https?://(www|m|s)\.youtube\.com/pcs/activeview - reject-200
     - ^https?://(www|m|s)\.youtube\.com/get_midroll_info - reject-200
     - ^https?://(www|m|s)\.youtube\.com/ptracking - reject-200
     - ^https?://youtubei\.googleapis\.com/youtubei/v1/ad_break - reject-200
-    # 配合上面的 *.googlevideo.com MitM 使用：
-    # - ^https?://[\w-]+\.googlevideo\.com/initplayback.+&oad - reject-200
 
   script:
-    - match: ^https://youtubei\.googleapis\.com/youtubei/v1/(browse|next|player|search|get_watch|reel/reel_item_watch|reel/reel_watch_sequence)
+    - match: ^https://youtubei\.googleapis\.com/youtubei/v1/(browse|next|player(\?|$)|search|get_watch|reel/reel_item_watch|reel/reel_watch_sequence)
       name: youtube-adblock
       type: response
       require-body: true

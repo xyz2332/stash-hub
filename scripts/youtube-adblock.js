@@ -2,12 +2,12 @@
  * YouTube iOS App AdBlock (Protobuf binary-mode response script for Stash)
  *
  * Targets InnerTube application/x-protobuf responses:
- *  - /youtubei/v1/player                (pre-roll, mid-roll, post-roll ads)
- *  - /youtubei/v1/get_watch             (combined player + next)
- *  - /youtubei/v1/browse                (home / feed / continuation ads)
- *  - /youtubei/v1/search                (search result ads)
- *  - /youtubei/v1/next                  (watch-page companion & feed ads)
- *  - /youtubei/v1/reel/reel_item_watch  (Shorts player ads)
+ *  - /youtubei/v1/player                  (pre-roll, mid-roll, post-roll ads)
+ *  - /youtubei/v1/get_watch               (combined player + next)
+ *  - /youtubei/v1/browse                  (home / feed / continuation ads)
+ *  - /youtubei/v1/search                  (search result ads)
+ *  - /youtubei/v1/next                    (watch-page companion & feed ads)
+ *  - /youtubei/v1/reel/reel_item_watch    (Shorts player ads)
  *  - /youtubei/v1/reel/reel_watch_sequence (Shorts feed ads)
  */
 
@@ -15,6 +15,8 @@ const AD_EML_PATTERNS = [
   'video_display_full',
   'video_display_carousel',
   'video_display_button',
+  'video_ads_lockup',
+  'feed_ad_',
   'banner_text_icon_buttoned_layout',
   'text_image_button_group_layout',
   'full_width_square_image_layout',
@@ -62,28 +64,6 @@ const PLAYER_AD_FIELDS = new Set([
   13, // playerAds
   42, // adSlots
   69, // adBreakHeartbeatParams
-]);
-
-// Container field numbers worth recursing into for feed/search/next responses
-const FEED_CONTAINER_FIELDS = new Set([
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-  21, 22, 23, 24, 25, 42,
-  58173949,  // singleColumnBrowseResultsRenderer
-  58174010,  // tabRenderer
-  49399797,  // sectionListRenderer
-  50195462,  // itemSectionRenderer
-  51845067,  // shelfRenderer / continuationItemRenderer
-  90823135,  // search wrapper
-  264272521, // richGridRenderer
-  265166751, // richItemRenderer
-  265166752, // richSectionRenderer
-  138681066, // singleColumnWatchNextResults
-  138681548, // twoColumnWatchNextResults
-  196516197, // appendContinuationItemsAction
-  357104971, // watchNext engagement panel wrapper (YouTube iOS)
-  361256913, // watchNext panel content wrapper (YouTube iOS)
-  361588638, // watchNext companion ad banner wrapper (YouTube iOS)
-  153515154, // elementRenderer (checked directly)
 ]);
 
 function readVarint(buf, pos, end) {
@@ -217,10 +197,10 @@ function isAdEmlString(str) {
  */
 function isAdElement(buf, start, end, depth) {
   if (depth > 6) return false;
-  // Fast byte check for strong ad indicators
   if (
     bytesContainAscii(buf, start, end, 'pagead/adview') ||
     bytesContainAscii(buf, start, end, 'pagead/interaction') ||
+    bytesContainAscii(buf, start, end, 'googlesyndication.com') ||
     bytesContainAscii(buf, start, end, 'ad_badge.eml')
   ) {
     return true;
@@ -231,7 +211,6 @@ function isAdElement(buf, start, end, depth) {
     const f = fields[i];
     if (AD_RENDERER_FIELDS.has(f.fn)) return true;
     if (f.wt !== 2) continue;
-    // Check identifierProperties (183314536 -> 1) or template uri (172035250 -> 1)
     if (f.fn === 1 && depth >= 2) {
       const s = readAsciiString(buf, f.valStart, f.valEnd);
       if (s && s.indexOf('.eml') !== -1 && isAdEmlString(s)) return true;
@@ -274,11 +253,11 @@ function filterPlayerResponse(buf, start, end) {
 }
 
 /**
- * Filters a list container (sectionListRenderer, itemSectionRenderer, richGridRenderer, etc.)
- * and recursively cleans nested containers.
+ * Recursively filters feed / search / watch-next protobuf containers.
+ * Skips top-level ResponseContext (1) and frameworkUpdates (777) for speed.
  */
 function filterFeedMessage(buf, start, end, currentFn, depth, stats) {
-  if (depth > 14) return null;
+  if (depth > 12) return null;
   const fields = parseFields(buf, start, end);
   if (!fields) return null;
 
@@ -290,13 +269,11 @@ function filterFeedMessage(buf, start, end, currentFn, depth, stats) {
   for (let i = 0; i < fields.length; i++) {
     const f = fields[i];
 
-    // Skip top-level ResponseContext (1) and frameworkUpdates (777) for speed
     if (depth === 0 && (f.fn === 1 || f.fn === 777)) {
       parts.push(buf.subarray(f.rawStart, f.rawEnd));
       continue;
     }
 
-    // Direct ad renderer field anywhere inside feed
     if (AD_RENDERER_FIELDS.has(f.fn)) {
       modified = true;
       stats.removed++;
@@ -316,48 +293,20 @@ function filterFeedMessage(buf, start, end, currentFn, depth, stats) {
       continue;
     }
 
-    // Inside sectionListRenderer (49399797) or richGridRenderer (264272521), field 1 is repeated content
-    if ((currentFn === 49399797 || currentFn === 264272521) && f.fn === 1 && f.wt === 2) {
-      const subFields = parseFields(buf, f.valStart, f.valEnd);
-      if (subFields) {
-        let dropWrapper = false;
-        for (let j = 0; j < subFields.length; j++) {
-          if (AD_RENDERER_FIELDS.has(subFields[j].fn)) {
-            dropWrapper = true;
-            break;
-          }
-        }
-        if (dropWrapper) {
+    if (f.wt === 2 && f.valEnd - f.valStart >= 16) {
+      // Direct elementRenderer (e.g. companion banner in watchNext)
+      if (f.fn === 153515154) {
+        if (isAdElement(buf, f.valStart, f.valEnd, 1)) {
           modified = true;
           stats.removed++;
           continue;
         }
-      }
-      const subResult = filterFeedMessage(buf, f.valStart, f.valEnd, f.fn, depth + 1, stats);
-      if (subResult === 'EMPTY') {
-        modified = true;
+        parts.push(buf.subarray(f.rawStart, f.rawEnd));
         continue;
       }
-      if (subResult) {
-        modified = true;
-        parts.push(encodeLengthDelimited(f.tag, subResult));
-        continue;
-      }
-      parts.push(buf.subarray(f.rawStart, f.rawEnd));
-      continue;
-    }
 
-    // Recurse into known container fields
-    if (f.wt === 2 && f.valEnd - f.valStart >= 8 && FEED_CONTAINER_FIELDS.has(f.fn)) {
-      // If this field itself is an elementRenderer (153515154) directly in a panel/slot
-      if (f.fn === 153515154 && isAdElement(buf, f.valStart, f.valEnd, 1)) {
-        modified = true;
-        stats.removed++;
-        continue;
-      }
       const subResult = filterFeedMessage(buf, f.valStart, f.valEnd, f.fn, depth + 1, stats);
       if (subResult === 'EMPTY') {
-        // If an itemSectionRenderer became completely empty, signal parent wrapper to drop it too
         modified = true;
         continue;
       }
@@ -371,11 +320,10 @@ function filterFeedMessage(buf, start, end, currentFn, depth, stats) {
     parts.push(buf.subarray(f.rawStart, f.rawEnd));
   }
 
-  // If this was an itemSectionRenderer and all its items were ads, drop the whole section
+  // Drop empty itemSectionRenderer after all its ad items are removed
   if (currentFn === 50195462 && droppedItemCount > 0 && keptItemCount === 0) {
     return 'EMPTY';
   }
-  // If this was a section wrapper whose only itemSectionRenderer was dropped
   if (modified && parts.length === 0) {
     return 'EMPTY';
   }
@@ -393,7 +341,6 @@ function filterReelItemWatch(buf, stats) {
   for (let i = 0; i < fields.length; i++) {
     const f = fields[i];
     if (f.fn === 3 && f.wt === 2) {
-      // Check if field 3 wraps 139970731 (PlayerResponse) or is directly PlayerResponse
       const inner = parseFields(buf, f.valStart, f.valEnd);
       if (inner && inner.length === 1 && inner[0].fn === 139970731 && inner[0].wt === 2) {
         const pr = filterPlayerResponse(buf, inner[0].valStart, inner[0].valEnd);
@@ -489,7 +436,7 @@ function filterGetWatch(buf, stats) {
     const stats = { removed: 0 };
     let out = null;
 
-    if (url.indexOf('/youtubei/v1/player') !== -1) {
+    if (/\/youtubei\/v1\/player(\?|$)/.test(url)) {
       const res = filterPlayerResponse(body, 0, body.length);
       if (res.modified) {
         stats.removed = res.removed;
