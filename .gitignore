@@ -4,3 +4,4 @@ Thumbs.db
 *.har
 .vscode/
 .idea/
+.agents/
