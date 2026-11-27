@@ -41,14 +41,7 @@ http:
     - "grpc.biliapi.net"
 
   script:
-    - match: ^https://app\.bilibili\.com/x/(v2/splash/(list|show)|v2/feed/index(/story)?|resource/show/tab/v2)\?
-      name: bilibili-adblock
-      type: response
-      require-body: true
-      max-size: 5242880
-      timeout: 10
-      argument: "splash=${args.splash}&feed=${args.feed}&view=${args.view}&hideTabs=${args.hideTabs}&debug=${args.debug}"
-    - match: ^https://(grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.(app\.viewunite\.v1\.View/(View|RelatesFeed)|app\.dynamic\.v2\.Dynamic/DynAll|polymer\.app\.search\.v1\.Search/SearchAll)$
+    - match: ^https://(app\.bilibili\.com/x/(v2/splash/(list|show)|v2/feed/index(/story)?|resource/show/tab/v2)\?|(grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.(app\.viewunite\.v1\.View/(View|RelatesFeed)|app\.dynamic\.v2\.Dynamic/DynAll|polymer\.app\.search\.v1\.Search/SearchAll)$)
       name: bilibili-adblock
       type: response
       require-body: true

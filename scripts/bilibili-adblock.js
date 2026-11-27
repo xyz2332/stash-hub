@@ -1,9 +1,9 @@
 /**
  * Bilibili iOS App AdBlock (Stash response script)
  *
- * One script serves two override entries:
- *  - JSON endpoints (text mode): splash, home feed, story feed, tab layout
- *  - gRPC endpoints (binary-mode): View, RelatesFeed, DynAll, SearchAll
+ * One binary-mode script entry serves both kinds of endpoints:
+ *  - JSON (decoded from bytes): splash, home feed, story feed, tab layout
+ *  - gRPC protobuf: View, RelatesFeed, DynAll, SearchAll
  *
  * Arguments (from the override):
  *  - splash   (default: true)  empty the splash (launch screen) ad lists
@@ -284,10 +284,13 @@ function handleGrpc(raw) {
     const body = $response.body;
     if (!body) return $done({});
 
-    if (typeof body === 'string') {
-      const obj = JSON.parse(body);
+    // JSON endpoints live under /x/; binary-mode hands them over as decoded bytes.
+    if (typeof body === 'string' || /^https:\/\/app\.bilibili\.com\/x\//.test(URL_PATH)) {
+      const text = typeof body === 'string' ? body : new TextDecoder().decode(body);
+      const obj = JSON.parse(text);
       if (!handleJson(obj)) return $done({});
-      return $done({ body: JSON.stringify(obj) });
+      const out = JSON.stringify(obj);
+      return $done({ body: typeof body === 'string' ? out : new TextEncoder().encode(out) });
     }
 
     const out = handleGrpc(body);
