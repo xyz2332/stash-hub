@@ -55,7 +55,7 @@ http:
       binary-mode: true
       max-size: 5242880
       timeout: 10
-      argument: "bgPlay={{{bgPlay}}}&hideShorts={{{hideShorts}}}&hideUpload={{{hideUpload}}}&debug={{{debug}}}"
+      argument: "bgPlay=${args.bgPlay}&hideShorts=${args.hideShorts}&hideUpload=${args.hideUpload}&debug=${args.debug}"
 
 script-providers:
   youtube-adblock:
