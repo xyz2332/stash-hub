@@ -16,7 +16,7 @@ arguments:
     default: true
   view:
     title: 去除视频详情页广告
-    description: 播放器下方广告卡片，以及相关推荐中的广告
+    description: 播放器暂停广告、播完推荐广告、播放器下方广告卡片，以及相关推荐中的广告
     type: switch
     default: true
   sponsorBlock:
@@ -46,7 +46,7 @@ http:
     - "grpc.biliapi.net"
 
   script:
-    - match: ^https://(app\.bilibili\.com/x/(v2/splash/(list|show)|v2/feed/index(/story)?|resource/show/tab/v2)\?|(grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.(app\.viewunite\.v1\.View/(View|RelatesFeed|ViewProgress)|app\.playerunite\.v1\.Player/PlayViewUnite|community\.service\.dm\.v1\.DM/DmSegMobile|app\.dynamic\.v2\.Dynamic/DynAll|polymer\.app\.search\.v1\.Search/SearchAll)$)
+    - match: ^https://(app\.bilibili\.com/x/(v2/splash/(list|show)|v2/feed/index(/story)?|resource/show/tab/v2)\?|(grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.(app\.viewunite\.v1\.View/(View|RelatesFeed|ViewProgress|PlayPause|ViewEndPage)|app\.playerunite\.v1\.Player/PlayViewUnite|community\.service\.dm\.v1\.DM/DmSegMobile|app\.dynamic\.v2\.Dynamic/DynAll|polymer\.app\.search\.v1\.Search/SearchAll)$)
       name: bilibili-adblock
       type: response
       require-body: true

@@ -869,6 +869,18 @@ function handleDmSegMobile(raw) {
       return $done({ body: typeof body === 'string' ? out : enc.encode(out) });
     }
 
+    // Pause-screen & end-of-video ads: return empty uncompressed gRPC frame
+    if (CFG.view && /\/bilibili\.app\.viewunite\.v1\.View\/(PlayPause|ViewEndPage)$/.test(URL_PATH)) {
+      const headers = Object.assign({}, $response.headers, {
+        'grpc-status': '0',
+        'grpc-message': '',
+        'bili-status-code': '0',
+        'grpc-encoding': 'identity',
+      });
+      log(`${URL_PATH.split('/').pop()}: cleared`);
+      return $done({ headers, body: new Uint8Array(5) });
+    }
+
     // Async SponsorBlock gRPC endpoints
     if (CFG.sponsorBlock) {
       if (/\/bilibili\.app\.playerunite\.v1\.Player\/PlayViewUnite$/.test(URL_PATH)) {
