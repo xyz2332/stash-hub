@@ -548,8 +548,9 @@ function handlePlayViewUnite(raw) {
 // ---------------------------------------------------------------------------
 
 const CHRONOS_BASE =
-  'https://raw.githubusercontent.com/kokoryh/chronos/69a8996b1f1311b606021e3f194b0390280ab618/';
+  'https://raw.githubusercontent.com/kokoryh/chronos/refs/heads/master/';
 const CHRONOS_MAP = {
+  '5bca6725b04c018358e69be749f0ee11': '106d21a147f49e9d4ef86e2e8523474f',
   '45b564f5ba1fdd3746406937059addd8': 'e5a968f1a5055bbe5c12e67b100a6dcb',
   'c29bd8f2b64a8f57f49c3622c0f763db': 'ecca73e42e160074e0caf4b3ddb54a52',
   'c218977c14e5dfdafd51edf3ae49ed02': 'f993a054969a4f6ae6b20a65f1292e47',
@@ -582,9 +583,9 @@ function patchChronosField(chronosBytes) {
   let next = CHRONOS_MAP[md5];
   if (!next) {
     const ua = getReqHeader('user-agent');
-    if (/\bbili-hd\b/.test(ua)) next = 'f993a054969a4f6ae6b20a65f1292e47';
+    if (/\bbili-hd\b/.test(ua)) next = 'e5a968f1a5055bbe5c12e67b100a6dcb';
     else if (/\bbili-inter\b/.test(ua)) next = '8c3feda2e92bf60e8a7aeade1a231586';
-    else next = 'e5a968f1a5055bbe5c12e67b100a6dcb';
+    else next = '106d21a147f49e9d4ef86e2e8523474f';
   }
 
   // Replace field 1 (md5) & field 2 (file), drop field 3 (sign), preserve unknown fields
@@ -771,8 +772,9 @@ function handleDmSegMobile(raw) {
 
       const injected = [];
       for (const seg of inWin) {
-        const startMs = Math.max(500, Math.round(seg.start * 1000));
+        const startMs = Math.min(Math.round(seg.end * 1000) - 500, Math.round(seg.start * 1000) + 2000);
         const endMs = Math.round(seg.end * 1000);
+        if (startMs >= endMs) continue;
         const action = 'airborne:' + endMs;
         if (existingActions.has(action)) continue;
         const dmId = 900000000 + Math.floor(startMs);
