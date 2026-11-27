@@ -1,0 +1,63 @@
+name: Bilibili AdBlock (iOS App)
+desc: 去除哔哩哔哩 iOS App 开屏、首页/竖屏/动态/搜索信息流广告，以及视频详情页的播放器下方广告与相关推荐广告
+category: AdBlock
+arguments-version: 1
+
+arguments:
+  splash:
+    title: 去除开屏广告
+    description: 清空开屏广告下发列表（品牌默认开屏图不受影响）
+    type: switch
+    default: true
+  feed:
+    title: 去除信息流广告
+    description: 首页推荐、竖屏 Story、动态、搜索结果中的广告与推广卡片
+    type: switch
+    default: true
+  view:
+    title: 去除视频详情页广告
+    description: 播放器下方广告卡片，以及相关推荐中的广告
+    type: switch
+    default: true
+  hideTabs:
+    title: 精简入口
+    description: 移除首页活动 Tab、顶部游戏中心、底部会员购
+    type: switch
+    default: false
+  debug:
+    title: 调试日志
+    description: 在 Stash 脚本日志中输出每次拦截/修改详情
+    type: switch
+    default: false
+
+rules:
+  # 拦截 B 站 QUIC (UDP)，强制回退到 HTTPS/TCP 以便 MitM 生效
+  - AND,((DOMAIN-SUFFIX,bilibili.com),(NETWORK,UDP)),REJECT
+  - AND,((DOMAIN-SUFFIX,biliapi.net),(NETWORK,UDP)),REJECT
+
+http:
+  mitm:
+    - "app.bilibili.com"
+    - "grpc.biliapi.net"
+
+  script:
+    - match: ^https://app\.bilibili\.com/x/(v2/splash/(list|show)|v2/feed/index(/story)?|resource/show/tab/v2)\?
+      name: bilibili-adblock
+      type: response
+      require-body: true
+      max-size: 5242880
+      timeout: 10
+      argument: "splash=${args.splash}&feed=${args.feed}&view=${args.view}&hideTabs=${args.hideTabs}&debug=${args.debug}"
+    - match: ^https://(grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.(app\.viewunite\.v1\.View/(View|RelatesFeed)|app\.dynamic\.v2\.Dynamic/DynAll|polymer\.app\.search\.v1\.Search/SearchAll)$
+      name: bilibili-adblock
+      type: response
+      require-body: true
+      binary-mode: true
+      max-size: 5242880
+      timeout: 10
+      argument: "splash=${args.splash}&feed=${args.feed}&view=${args.view}&hideTabs=${args.hideTabs}&debug=${args.debug}"
+
+script-providers:
+  bilibili-adblock:
+    url: https://raw.githubusercontent.com/xyz2332/stash-hub/main/scripts/bilibili-adblock.js
+    interval: 86400
