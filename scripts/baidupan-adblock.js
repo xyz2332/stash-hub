@@ -220,18 +220,8 @@ function handleJson(obj) {
 
   if (/\/coins\/center\/notice$/.test(URL_PATH)) {
     if (!CFG.cleanUI || !obj.data || typeof obj.data !== 'object') return false;
-    const d = obj.data;
-    d.title_msg_v2 = [];
-    d.default_title_msg_mypage = [];
-    d.gift = [];
-    d.show_count = 0;
-    d.redpacket_zero_msg_mypage = '';
-    d.elf_img = '';
-    d.coin_bubble_img = '';
-    d.coin_bubble_img_mypage = '';
-    d.red_bubble_img = '';
-    d.red_bubble_img_mypage = '';
-    log('coins/center/notice: cleared coin bubbles');
+    obj.data = {};
+    log('coins/center/notice: emptied task/coin center card');
     return true;
   }
 
@@ -247,9 +237,14 @@ function handleJson(obj) {
   }
 
   if (/\/act\/v2\/gamecenter\/(recommend|gametaskinfo|historyplay)$/.test(URL_PATH)) {
-    if (!CFG.cleanUI || !obj.data || typeof obj.data !== 'object') return false;
-    if (Array.isArray(obj.data.info)) obj.data.info = [];
-    if (Array.isArray(obj.data.list)) obj.data.list = [];
+    if (!CFG.cleanUI || !obj.data) return false;
+    if (Array.isArray(obj.data)) {
+      obj.data = [];
+    } else if (typeof obj.data === 'object') {
+      if (Array.isArray(obj.data.info)) obj.data.info = [];
+      if (Array.isArray(obj.data.list)) obj.data.list = [];
+      if (Array.isArray(obj.data.task_list)) obj.data.task_list = [];
+    }
     log(`${URL_PATH.split('/').pop()}: emptied gamecenter`);
     return true;
   }
