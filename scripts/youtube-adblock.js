@@ -62,7 +62,8 @@ const AD_RENDERER_FIELDS = new Set([
 const PLAYER_AD_FIELDS = new Set([
   7,  // adPlacements
   13, // playerAds
-  42, // adSlots
+  42, // adSlots (legacy)
+  68, // adSlots (YouTube iOS v21+)
   69, // adBreakHeartbeatParams
 ]);
 
