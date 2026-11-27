@@ -6,8 +6,8 @@
  *  - gRPC protobuf:
  *      AdBlock:      View, RelatesFeed, DynAll, SearchAll
  *      SponsorBlock: PlayViewUnite (AD_FRAGMENT strip + cache warmup),
- *                    ViewProgress (clickable progress bar chapters),
- *                    DmSegMobile (top-pinned ad-start reminder danmaku)
+ *                    ViewProgress (Chronos auto-skip bundle + progress bar chapters),
+ *                    DmSegMobile (Chronos airborne trigger danmaku)
  *
  * Arguments (from the override):
  *  - splash       (default: true)  empty the splash (launch screen) ad lists
@@ -544,8 +544,55 @@ function handlePlayViewUnite(raw) {
 }
 
 // ---------------------------------------------------------------------------
-// ViewProgress: inject clickable VideoViewPoint progress-bar chapters
+// ViewProgress: patch Chronos bundle (auto-skip) + inject VideoViewPoint chapters
 // ---------------------------------------------------------------------------
+
+const CHRONOS_BASE =
+  'https://raw.githubusercontent.com/kokoryh/chronos/69a8996b1f1311b606021e3f194b0390280ab618/';
+const CHRONOS_MAP = {
+  '45b564f5ba1fdd3746406937059addd8': 'e5a968f1a5055bbe5c12e67b100a6dcb',
+  'c29bd8f2b64a8f57f49c3622c0f763db': 'ecca73e42e160074e0caf4b3ddb54a52',
+  'c218977c14e5dfdafd51edf3ae49ed02': 'f993a054969a4f6ae6b20a65f1292e47',
+  '8232ffb6ee43b687b5fe5add5b3e97de': 'feaca416bbc1174b8e935cf87ff8f0b5',
+  '325e7073ffc6fb5263682fecdcd1058f': '932002070dc1b51241198a074d2279fc',
+  '3a14beddd23328eaddfe9f0eb048d713': '8c3feda2e92bf60e8a7aeade1a231586',
+};
+
+function getReqHeader(name) {
+  const h = ($request && $request.headers) || {};
+  const lower = name.toLowerCase();
+  for (const k of Object.keys(h)) {
+    if (k.toLowerCase() === lower) return String(h[k] || '');
+  }
+  return '';
+}
+
+function patchChronosField(chronosBytes) {
+  const inner = parse(chronosBytes);
+  let md5 = '';
+  for (const fld of inner) {
+    if (fld.f === 1 && fld.wt === 2) {
+      md5 = dec.decode(fld.val).toLowerCase();
+      break;
+    }
+  }
+  if (!/^[a-f0-9]{32}$/.test(md5)) return null;
+  if (Object.values(CHRONOS_MAP).includes(md5)) return null;
+
+  let next = CHRONOS_MAP[md5];
+  if (!next) {
+    const ua = getReqHeader('user-agent');
+    if (/\bbili-hd\b/.test(ua)) next = 'f993a054969a4f6ae6b20a65f1292e47';
+    else if (/\bbili-inter\b/.test(ua)) next = '8c3feda2e92bf60e8a7aeade1a231586';
+    else next = 'e5a968f1a5055bbe5c12e67b100a6dcb';
+  }
+
+  // Replace field 1 (md5) & field 2 (file), drop field 3 (sign), preserve unknown fields
+  const kept = inner
+    .filter((fld) => fld.f !== 1 && fld.f !== 2 && fld.f !== 3)
+    .map((fld) => chronosBytes.subarray(fld.start, fld.end));
+  return cat([strField(1, next), strField(2, CHRONOS_BASE + next + '.zip'), ...kept]);
+}
 
 function buildVideoPoints(segs, duration) {
   const points = [];
@@ -592,17 +639,24 @@ function handleViewProgress(raw) {
 
   fetchSponsorSegments(aid, cid, 0, (segs, duration) => {
     try {
-      if (segs.length === 0) return finishGrpc(null);
-      const pointEntries = buildVideoPoints(segs, duration);
-      if (pointEntries.length === 0) return finishGrpc(null);
-
-      // ViewProgressReply.video_guide (1) -> VideoGuide.video_point (2) -> VideoViewPoint
+      const pointEntries = segs.length > 0 ? buildVideoPoints(segs, duration) : [];
       const fields = parse(g.msg);
       const parts = [];
+      let changed = false;
       let hasGuide = false;
 
       for (const fld of fields) {
-        if (fld.f === 1 && fld.wt === 2) {
+        if (fld.f === 2 && fld.wt === 2) {
+          // Field 2 = Chronos: swap to airborne-enabled Chronos zip (enables auto-seek)
+          const nc = patchChronosField(fld.val);
+          if (nc) {
+            parts.push(lenField(2, nc));
+            changed = true;
+            log('ViewProgress: patched Chronos bundle');
+            continue;
+          }
+        }
+        if (fld.f === 1 && fld.wt === 2 && pointEntries.length > 0) {
           hasGuide = true;
           const gFields = parse(fld.val);
           const gParts = [];
@@ -610,7 +664,6 @@ function handleViewProgress(raw) {
           for (const gf of gFields) {
             if (gf.f === 2 && gf.wt === 2) {
               hasVP = true;
-              // Append ad markers to existing chapters & ensure point_permanent=1
               const vpFields = parse(gf.val);
               const vpParts = [];
               let hasPerm = false;
@@ -644,18 +697,20 @@ function handleViewProgress(raw) {
             gParts.push(lenField(2, cat([...pointEntries, varintField(3, 1)])));
           }
           parts.push(lenField(1, cat(gParts)));
-        } else {
-          parts.push(g.msg.subarray(fld.start, fld.end));
+          changed = true;
+          continue;
         }
+        parts.push(g.msg.subarray(fld.start, fld.end));
       }
 
-      if (!hasGuide) {
+      if (!hasGuide && pointEntries.length > 0) {
         const vp = cat([...pointEntries, varintField(3, 1)]);
         parts.push(lenField(1, lenField(2, vp)));
+        changed = true;
       }
 
-      log(`ViewProgress: injected ${segs.length} sponsor chapter(s)`);
-      finishGrpc(packGrpc(g.flag, cat(parts)));
+      if (pointEntries.length > 0) log(`ViewProgress: injected ${segs.length} sponsor chapter(s)`);
+      finishGrpc(changed ? packGrpc(g.flag, cat(parts)) : null);
     } catch (e) {
       log('ViewProgress inject err: ' + e.message);
       finishGrpc(null);
@@ -664,7 +719,7 @@ function handleViewProgress(raw) {
 }
 
 // ---------------------------------------------------------------------------
-// DmSegMobile: inject clickable "空降 MM:SS" danmaku at sponsor start
+// DmSegMobile: inject Chronos airborne trigger danmaku (auto-seek to ad end)
 // ---------------------------------------------------------------------------
 
 function handleDmSegMobile(raw) {
@@ -702,30 +757,51 @@ function handleDmSegMobile(raw) {
       const inWin = segs.filter((s) => s.start >= winStart && s.start < winEnd);
       if (inWin.length === 0) return finishGrpc(null);
 
-      const nowSec = Math.floor(Date.now() / 1000);
-      const injected = inWin.map((seg, idx) => {
-        const dmId = 9000000000000000000n + BigInt(segIdx * 100 + idx);
-        const progressMs = Math.max(500, Math.round(seg.start * 1000));
-        const text = `⏩ ${seg.label}至 ${formatTime(seg.end)}（点进度条下一段跳过）`;
-        return lenField(
-          1,
-          cat([
-            varintField(1, dmId),
-            varintField(2, progressMs),
-            varintField(3, 5),        // mode = 5 (top pinned)
-            varintField(4, 25),       // fontsize = 25
-            varintField(5, 0xffcc00), // amber highlight
-            strField(6, '00000000'),  // midHash
-            strField(7, text),        // content
-            varintField(8, nowSec),   // ctime
-            varintField(9, 10),       // weight = 10 (highest)
-            varintField(11, 0),       // pool = 0
-            strField(12, dmId.toString()),
-          ])
-        );
-      });
+      // Avoid duplicate airborne injection if already present
+      const existingActions = new Set();
+      try {
+        for (const fld of parse(g.msg)) {
+          if (fld.f === 1 && fld.wt === 2) {
+            for (const ef of parse(fld.val)) {
+              if (ef.f === 10 && ef.wt === 2) existingActions.add(dec.decode(ef.val));
+            }
+          }
+        }
+      } catch (e) {}
 
-      log(`DmSegMobile(seg=${segIdx}): injected ${injected.length} airdrop danmaku`);
+      const injected = [];
+      for (const seg of inWin) {
+        const startMs = Math.max(500, Math.round(seg.start * 1000));
+        const endMs = Math.round(seg.end * 1000);
+        const action = 'airborne:' + endMs;
+        if (existingActions.has(action)) continue;
+        const dmId = 900000000 + Math.floor(startMs);
+        injected.push(
+          lenField(
+            1,
+            cat([
+              varintField(1, dmId),
+              varintField(2, startMs),
+              varintField(3, 5),         // mode = 5 (top)
+              varintField(4, 50),        // fontsize = 50
+              varintField(5, 16777215),  // white
+              strField(6, '1948dd5d'),   // midHash
+              strField(7, '空指部已就位'), // Chronos airborne trigger text
+              varintField(8, 1735660800),
+              varintField(9, 11),        // weight = 11
+              strField(10, action),      // airborne:<endMs>
+              strField(12, String(dmId)),
+              varintField(13, 1310724),  // attr
+              varintField(25, 1),        // type
+              varintField(26, cid),      // oid
+              varintField(27, 1),        // dm_from
+            ])
+          )
+        );
+      }
+      if (injected.length === 0) return finishGrpc(null);
+
+      log(`DmSegMobile(seg=${segIdx}): injected ${injected.length} airborne trigger(s)`);
       finishGrpc(packGrpc(g.flag, cat([g.msg, ...injected])));
     } catch (e) {
       log('DmSegMobile inject err: ' + e.message);
@@ -755,7 +831,7 @@ function handleDmSegMobile(raw) {
       if (/\/bilibili\.app\.playerunite\.v1\.Player\/PlayViewUnite$/.test(URL_PATH)) {
         return handlePlayViewUnite(body);
       }
-      if (/\/bilibili\.app\.viewunite\.v1\.View\/ViewProgress$/.test(URL_PATH)) {
+      if (/\/bilibili\.app\.(view|viewunite)\.v1\.View\/ViewProgress$/.test(URL_PATH)) {
         return handleViewProgress(body);
       }
       if (/\/bilibili\.community\.service\.dm\.v1\.DM\/DmSegMobile$/.test(URL_PATH)) {
