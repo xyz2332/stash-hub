@@ -20,8 +20,8 @@ arguments:
     type: switch
     default: true
   sponsorBlock:
-    title: 跳过视频中广告 (空降助手)
-    description: 接入 BilibiliSponsorBlock，跳过/标注视频内恰饭与推广片段，并剥离官方插播广告
+    title: 标注/辅助跳过恰饭广告 (空降助手)
+    description: 接入 BilibiliSponsorBlock，在进度条标记恰饭广告分段（点击下一段跳过）并弹出提示弹幕，同时剥离官方插播广告
     type: switch
     default: true
   hideTabs:

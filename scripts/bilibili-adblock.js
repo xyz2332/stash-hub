@@ -5,9 +5,9 @@
  *  - JSON (decoded from bytes): splash, home feed, story feed, tab layout
  *  - gRPC protobuf:
  *      AdBlock:      View, RelatesFeed, DynAll, SearchAll
- *      SponsorBlock: PlayViewUnite (AD_FRAGMENT strip + ClipInfo auto-skip),
- *                    ViewProgress (progress bar chapters),
- *                    DmSegMobile (clickable "空降 MM:SS" danmaku)
+ *      SponsorBlock: PlayViewUnite (AD_FRAGMENT strip + cache warmup),
+ *                    ViewProgress (clickable progress bar chapters),
+ *                    DmSegMobile (top-pinned ad-start reminder danmaku)
  *
  * Arguments (from the override):
  *  - splash       (default: true)  empty the splash (launch screen) ad lists
@@ -490,7 +490,7 @@ function fetchSponsorSegments(aid, cid, durationHint, cb) {
 }
 
 // ---------------------------------------------------------------------------
-// PlayViewUnite: strip AD_FRAGMENT + inject ClipInfo & SKIPOPED(33)
+// PlayViewUnite: strip AD_FRAGMENT + warm SponsorBlock cache with duration
 // ---------------------------------------------------------------------------
 
 function isAdFragmentVideo(b) {
@@ -507,101 +507,13 @@ function isAdFragmentVideo(b) {
   return false;
 }
 
-function enableSkipOpEdConf(playArcConfBytes) {
-  const fields = parse(playArcConfBytes);
-  const parts = [];
-  let found = false;
-  // map<int32, ArcConf> entry: key=33 (SKIPOPED), value=ArcConf{ is_support(1)=1 }
-  const skipEntry = lenField(1, cat([varintField(1, 33), lenField(2, varintField(1, 1))]));
-  for (const fld of fields) {
-    if (fld.f === 1 && fld.wt === 2) {
-      let key = -1;
-      try {
-        for (const kv of parse(fld.val)) {
-          if (kv.f === 1 && kv.wt === 0) {
-            key = kv.num;
-            break;
-          }
-        }
-      } catch (e) {}
-      if (key === 33) {
-        parts.push(skipEntry);
-        found = true;
-        continue;
-      }
-    }
-    parts.push(playArcConfBytes.subarray(fld.start, fld.end));
-  }
-  if (!found) parts.push(skipEntry);
-  return cat(parts);
-}
-
-function buildClipInfoBytes(segs) {
-  return segs.map((seg) =>
-    lenField(
-      6,
-      cat([
-        varintField(2, Math.floor(seg.start)),
-        varintField(3, Math.ceil(seg.end)),
-        varintField(4, 1), // CLIP_TYPE_OP
-        strField(5, '已跳过' + seg.label),
-      ])
-    )
-  );
-}
-
-const PGC_ANY_URL = 'type.googleapis.com/bilibili.app.playerunite.pgcanymodel.PGCAnyModel';
-const UGC_ANY_URL = 'type.googleapis.com/bilibili.app.playerunite.ugcanymodel.UGCAnyModel';
-
-function patchPlayViewUniteSupplement(existingAnyBytes, segs) {
-  const clipFields = buildClipInfoBytes(segs);
-  if (!existingAnyBytes) {
-    const business = cat(clipFields);
-    const pgcModel = lenField(3, business); // PGCAnyModel.business = 3
-    return cat([strField(1, PGC_ANY_URL), lenField(2, pgcModel)]);
-  }
-  const anyFields = parse(existingAnyBytes);
-  let typeUrl = '';
-  let anyVal = null;
-  for (const fld of anyFields) {
-    if (fld.f === 1 && fld.wt === 2) typeUrl = dec.decode(fld.val);
-    else if (fld.f === 2 && fld.wt === 2) anyVal = fld.val;
-  }
-
-  // If UGC without PlayLimit payload, replace with PGCAnyModel carrying business.clip_info
-  if (typeUrl === UGC_ANY_URL && (!anyVal || anyVal.length === 0)) {
-    const pgcModel = lenField(3, cat(clipFields));
-    return cat([strField(1, PGC_ANY_URL), lenField(2, pgcModel)]);
-  }
-
-  // If already PGCAnyModel, append clip_info into its business (field 3)
-  if (typeUrl === PGC_ANY_URL) {
-    const pgcFields = anyVal ? parse(anyVal) : [];
-    const pgcParts = [];
-    let hasBiz = false;
-    for (const pf of pgcFields) {
-      if (pf.f === 3 && pf.wt === 2) {
-        hasBiz = true;
-        pgcParts.push(lenField(3, cat([pf.val, ...clipFields])));
-      } else {
-        pgcParts.push(anyVal.subarray(pf.start, pf.end));
-      }
-    }
-    if (!hasBiz) pgcParts.push(lenField(3, cat(clipFields)));
-    return cat([strField(1, PGC_ANY_URL), lenField(2, cat(pgcParts))]);
-  }
-
-  // Keep non-empty UGCAnyModel (e.g. PlayLimit) untouched
-  return null;
-}
-
 function handlePlayViewUnite(raw) {
   const g = unpackGrpc(raw);
   if (!g) return finishGrpc(null);
   let msg = g.msg;
   let changed = false;
 
-  // 1) Always strip official AD_FRAGMENT entries in field 10 (FragmentVideo)
+  // Strip official AD_FRAGMENT entries in field 10 (FragmentVideo)
   const adStat = { n: 0 };
   const stripped = dropAt(msg, [10, 1], isAdFragmentVideo, adStat);
   if (stripped) {
@@ -610,7 +522,7 @@ function handlePlayViewUnite(raw) {
     log(`PlayViewUnite: AD_FRAGMENT x${adStat.n}`);
   }
 
-  // Extract aid, cid, duration from PlayArc (field 6)
+  // Extract aid, cid, duration from PlayArc (field 6) to pre-warm cache for ViewProgress / DmSegMobile
   let aid = 0;
   let cid = 0;
   let duration = 0;
@@ -626,68 +538,30 @@ function handlePlayViewUnite(raw) {
     }
   } catch (e) {}
 
-  fetchSponsorSegments(aid, cid, duration, (segs) => {
-    try {
-      if (segs.length > 0) {
-        const fields = parse(msg);
-        const parts = [];
-        let patchedSupp = false;
-        let hasArcConf = false;
-        let hasSupp = false;
-        for (const fld of fields) {
-          if (fld.f === 2 && fld.wt === 2) {
-            hasArcConf = true;
-            parts.push(lenField(2, enableSkipOpEdConf(fld.val)));
-          } else if (fld.f === 5 && fld.wt === 2) {
-            hasSupp = true;
-            const ns = patchPlayViewUniteSupplement(fld.val, segs);
-            if (ns) {
-              parts.push(lenField(5, ns));
-              patchedSupp = true;
-            } else {
-              parts.push(msg.subarray(fld.start, fld.end));
-            }
-          } else {
-            parts.push(msg.subarray(fld.start, fld.end));
-          }
-        }
-        if (!hasArcConf) parts.push(lenField(2, enableSkipOpEdConf(new Uint8Array(0))));
-        if (!hasSupp) {
-          parts.push(lenField(5, patchPlayViewUniteSupplement(null, segs)));
-          patchedSupp = true;
-        }
-        if (patchedSupp) {
-          msg = cat(parts);
-          changed = true;
-          log(`PlayViewUnite: injected ${segs.length} ClipInfo segment(s)`);
-        }
-      }
-      finishGrpc(changed ? packGrpc(g.flag, msg) : null);
-    } catch (e) {
-      log('PlayViewUnite inject err: ' + e.message);
-      finishGrpc(changed ? packGrpc(g.flag, msg) : null);
-    }
+  fetchSponsorSegments(aid, cid, duration, () => {
+    finishGrpc(changed ? packGrpc(g.flag, msg) : null);
   });
 }
 
 // ---------------------------------------------------------------------------
-// ViewProgress: inject VideoViewPoint progress-bar chapters
+// ViewProgress: inject clickable VideoViewPoint progress-bar chapters
 // ---------------------------------------------------------------------------
 
 function buildVideoPoints(segs, duration) {
   const points = [];
   let cursor = 0;
-  for (const seg of segs) {
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
     const s = Math.floor(seg.start);
     const e = Math.ceil(seg.end);
     if (s > cursor) {
-      points.push({ from: cursor, to: s, content: '正片' });
+      points.push({ from: cursor, to: s, content: i === 0 ? '正片' : '⏭ 跳过广告' });
     }
     points.push({ from: s, to: e, content: '⏩ ' + seg.label });
     cursor = Math.max(cursor, e);
   }
   if (duration > cursor) {
-    points.push({ from: cursor, to: Math.ceil(duration), content: '正片' });
+    points.push({ from: cursor, to: Math.ceil(duration), content: '⏭ 跳过广告' });
   }
   return points.map((p) =>
     lenField(
@@ -832,7 +706,7 @@ function handleDmSegMobile(raw) {
       const injected = inWin.map((seg, idx) => {
         const dmId = 9000000000000000000n + BigInt(segIdx * 100 + idx);
         const progressMs = Math.max(500, Math.round(seg.start * 1000));
-        const text = `空降 ${formatTime(seg.end)} (${seg.label})`;
+        const text = `⏩ ${seg.label}至 ${formatTime(seg.end)}（点进度条下一段跳过）`;
         return lenField(
           1,
           cat([
