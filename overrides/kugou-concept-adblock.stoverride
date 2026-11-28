@@ -1,0 +1,97 @@
+name: Kugou Concept AdBlock (iOS App)
+desc: 去除酷狗音乐概念版 iOS App 开屏、弹窗、首页/乐库横幅、播放页挂件与搜索推广广告，并拦截 TME / 优量汇 / 穿山甲广告域名与上报
+category: AdBlock
+arguments-version: 1
+
+arguments:
+  splash:
+    title: 去除开屏广告
+    description: 清空 lite_v_splash 广告列表并将启动/热启等待时间置零
+    type: switch
+    default: true
+  popup:
+    title: 去除弹窗广告
+    description: 清空首页、我的页面与播放页弹窗广告（lite_v_popup、lite_v_youth_my_page_popup、lite_v_youth_player_popup）
+    type: switch
+    default: true
+  banner:
+    title: 去除首页与乐库横幅
+    description: 清空首页横幅（lite_v_youth_home_banner）及乐库页顶部轮播推广（yueku/tab banner 模块）
+    type: switch
+    default: true
+  widget:
+    title: 去除挂件与活动推广
+    description: 清空播放页挂件、VIP 中心推广链接、任务中心夺宝推广及账号页邀好友提示
+    type: switch
+    default: true
+  searchAd:
+    title: 去除搜索框推广词
+    description: 清空搜索框未聚焦时的默认推广词（lite_v_search_no_focus）
+    type: switch
+    default: true
+  debug:
+    title: 调试日志
+    description: 在 Stash 脚本日志中输出每次拦截/修改详情
+    type: switch
+    default: false
+
+rules:
+  # 拦截酷狗概念版广告接口 QUIC (UDP 443)，强制回退到 HTTPS/TCP 以便 MitM 生效
+  - AND,((DOMAIN,gateway.kugou.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  - AND,((DOMAIN,adservice.kugou.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  - AND,((DOMAIN,mobilelog.kugou.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  - AND,((DOMAIN,tmead.y.qq.com),(DST-PORT,443),(NETWORK,UDP)),REJECT
+  # 拦截 TME 广告 SDK 配置、代理与素材域名
+  - DOMAIN,ad.tencentmusic.com,REJECT
+  - DOMAIN,mc.tencentmusic.com,REJECT
+  - DOMAIN,adstats.tencentmusic.com,REJECT
+  - DOMAIN,adcdn.tencentmusic.com,REJECT
+  - DOMAIN,adcdn6.tencentmusic.com,REJECT
+  - DOMAIN,adexpo.tencentmusic.com,REJECT
+  - DOMAIN,adclick.tencentmusic.com,REJECT
+  - DOMAIN,tmeadcomm.y.qq.com,REJECT
+  - DOMAIN,tmeadbak.y.qq.com,REJECT
+  # 拦截优量汇 (GDT) 广告与上报域名
+  - DOMAIN,xs.gdt.qq.com,REJECT
+  - DOMAIN,xsweb.gdt.qq.com,REJECT
+  - DOMAIN,mi.gdt.qq.com,REJECT
+  - DOMAIN,c2.gdt.qq.com,REJECT
+  - DOMAIN,v.gdt.qq.com,REJECT
+  - DOMAIN,rpt.gdt.qq.com,REJECT
+  - DOMAIN,adsmind.gdtimg.com,REJECT
+  - DOMAIN,pgdt.gtimg.cn,REJECT
+  - DOMAIN,tangram.e.qq.com,REJECT
+  - DOMAIN,sdkreport.e.qq.com,REJECT
+  # 拦截穿山甲 (Pangle) 广告与上报域名
+  - DOMAIN,api-access.pangolin-sdk-toutiao.com,REJECT
+  - DOMAIN,api-access.pangolin-sdk-toutiao1.com,REJECT
+  - DOMAIN,sf3-fe-tos.pglstatp-toutiao.com,REJECT
+  - DOMAIN,dig.bdurl.net,REJECT
+
+http:
+  mitm:
+    - "gateway.kugou.com"
+    - "adservice.kugou.com"
+    - "mobilelog.kugou.com"
+    - "tmead.y.qq.com"
+
+  url-rewrite:
+    # 拦截酷狗与 TME 广告曝光/统计上报与第三方监测配置
+    - ^https?://gateway\.kugou\.com/ads\.gateway/v3/stat_expose - reject-200
+    - ^https?://gateway\.kugou\.com/v1/exposureupload - reject-200
+    - ^https?://mobilelog\.kugou\.com/adtrackconfig\.json - reject-200
+    - ^https?://tmead\.y\.qq\.com/mareport - reject-200
+
+  script:
+    - match: ^https?://(gateway\.kugou\.com/(ads\.(service|gateway)/v2/lite_v_(splash|popup|youth_home_banner|youth_my_page_popup|youth_player_popup|vip_center|search_no_focus)|youth/v1/(yueku/tab|account/get_vip_tips))|adservice\.kugou\.com/v2/lite_v_(youth_player_widget|youth_task_center))(\?|$)
+      name: kugou-concept-adblock
+      type: response
+      require-body: true
+      max-size: 5242880
+      timeout: 10
+      argument: "splash=${args.splash}&popup=${args.popup}&banner=${args.banner}&widget=${args.widget}&searchAd=${args.searchAd}&debug=${args.debug}"
+
+script-providers:
+  kugou-concept-adblock:
+    url: https://raw.githubusercontent.com/xyz2332/stash-hub/main/scripts/kugou-concept-adblock.js
+    interval: 86400

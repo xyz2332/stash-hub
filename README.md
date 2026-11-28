@@ -10,6 +10,7 @@
 | **Bilibili AdBlock (iOS App)** | 去除广告，支持空降助手跳过/标注恰饭广告、精简界面入口 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/bilibili-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/bilibili-adblock.stoverride) |
 | **QQ Music AdBlock (iOS App)** | 去除开屏、横幅、搜索、信息流与弹窗广告，拦截广告域名与上报 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/qqmusic-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/qqmusic-adblock.stoverride) |
 | **Baidu Netdisk AdBlock (iOS App)** | 去除开屏、弹窗、激励视频与相册推广广告，精简游戏中心、金币气泡与冗余入口 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/baidupan-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/baidupan-adblock.stoverride) |
+| **Kugou Concept AdBlock (iOS App)** | 去除开屏、弹窗、首页/乐库横幅、播放页挂件与搜索推广广告，拦截广告域名与上报 | [Raw](https://raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/kugou-concept-adblock.stoverride) | [![安装到 Stash](https://img.shields.io/badge/安装到-Stash-007AFF?style=flat-square)](https://link.stash.ws/install-override/raw.githubusercontent.com/xyz2332/stash-hub/main/overrides/kugou-concept-adblock.stoverride) |
 
 ## 目录结构
 
